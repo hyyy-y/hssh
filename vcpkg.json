@@ -1,0 +1,11 @@
+{
+  "name": "hssh",
+  "version": "0.1.0",
+  "description": "A fully open-source, cross-platform, high-performance GUI SSH client.",
+  "dependencies": [
+    "sqlite3",
+    "toml11",
+    "libssh",
+    "libvterm"
+  ]
+}
