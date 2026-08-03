@@ -1,0 +1,48 @@
+# Build directories
+build/
+build-*/
+cmake-build-*/
+out/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+*.ninja
+.ninja_deps
+.ninja_log
+Testing/
+_CPack_Packages/
+
+# Qt
+*.qm
+*.moc
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+hssh_autogen/
+*.autosave
+
+# IDE
+.idea/
+.vscode/
+*.user
+*.suo
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Transient debug scripts (process/stack inspection helpers)
+_procs.ps1
+_stackscan.py
+_stackwalk.py
+
+# Logs
+*.log
+terminal_debug.log
+lifecycle.txt
