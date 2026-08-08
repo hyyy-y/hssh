@@ -75,6 +75,8 @@ signals:
     void errorOccurred(const QString &message);
     void dirListed(const QString &path, const QList<hssh::SftpFileInfo> &entries);
     void dirTreeListed(const QString &path, const QList<hssh::RemoteFileEntry> &entries);
+    // Periodic progress during a recursive tree walk (compare analysis).
+    void dirTreeProgress(const QString &path, int entriesScanned);
     void canonicalized(const QString &path, const QString &canonicalPath);
     void operationFinished(const QString &operation, bool ok, const QString &message);
     void transferProgress(const QString &path, qint64 bytesDone, qint64 bytesTotal);
@@ -115,6 +117,9 @@ private:
     ssh_session m_ssh = nullptr;
     sftp_session m_sftp = nullptr;
     std::atomic<bool> m_cancelTransfer{false};
+    // Running counter for recursive tree walks (progress reporting).
+    int m_treeWalkCount = 0;
+    QString m_treeWalkPath;
 };
 
 } // namespace hssh

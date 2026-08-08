@@ -4,12 +4,22 @@
 
 ## 项目状态
 
-目前处于早期开发阶段，已完成项目骨架搭建（Qt6 + CMake）。
+早期开发阶段，已完成以下功能：
+
+- **会话管理**：分组树形结构、快速搜索、导入/导出（JSON）、最近会话历史、SQLite 存储
+- **终端**：libvterm 仿真（滚动回滚、选择复制、右键粘贴、Ctrl+F 搜索高亮）、多标签页、本地 Shell（PowerShell/CMD/WSL/bash/zsh/fish）、自动会话日志
+- **SSH 连接**：密码/公钥/键盘交互/SSH Agent 认证、KeepAlive 心跳、断线自动重连、登录后命令
+- **SFTP**：上传/下载/删除/重命名/拖拽/递归传输/传输队列
+- **文件对比**：本地/远程双栏对比与递归目录对比
+- **端口转发**：本地 / 远程 / 动态（SOCKS5）
+- **高级**：命令发送器（多终端广播）、专注模式、屏幕锁定
+- **Agent**：MCP (stdio) 与本地 REST API（`127.0.0.1:8222`）、`hssh cli exec` 命令行，详见 [docs/agent.md](./docs/agent.md)
 
 ## 文档
 
 - [需求文档](./docs/requirements.md)
 - [技术选型分析](./docs/tech-stack.md)
+- [Agent 使用说明（MCP / REST API）](./docs/agent.md)
 
 ## 目标
 

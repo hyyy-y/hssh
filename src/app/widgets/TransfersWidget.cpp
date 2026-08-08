@@ -4,6 +4,8 @@
 
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QLabel>
+#include <QProgressBar>
 #include <QStandardItemModel>
 #include <QTableView>
 #include <QToolButton>
@@ -30,6 +32,17 @@ TransfersWidget::TransfersWidget(QWidget *parent)
     buttonBar->addWidget(clearButton);
     layout->addLayout(buttonBar);
 
+    // Overall progress across all transfers.
+    auto *summaryRow = new QHBoxLayout;
+    m_summaryLabel = new QLabel(tr("No transfers"), this);
+    m_overallBar = new QProgressBar(this);
+    m_overallBar->setRange(0, 100);
+    m_overallBar->setValue(0);
+    m_overallBar->setMaximumHeight(14);
+    summaryRow->addWidget(m_summaryLabel);
+    summaryRow->addWidget(m_overallBar, 1);
+    layout->addLayout(summaryRow);
+
     m_model = new QStandardItemModel(0, 5, this);
     m_model->setHorizontalHeaderLabels({tr("Name"), tr("Direction"), tr("Session"), tr("Progress"), tr("Status")});
 
@@ -54,12 +67,7 @@ TransfersWidget::~TransfersWidget() = default;
 
 int TransfersWidget::rowForId(int id) const
 {
-    for (int row = 0; row < m_model->rowCount(); ++row) {
-        if (m_model->item(row, 0)->data(kIdRole).toInt() == id) {
-            return row;
-        }
-    }
-    return -1;
+    return m_rowById.value(id, -1);
 }
 
 void TransfersWidget::onTransferAdded(int id)
@@ -75,7 +83,11 @@ void TransfersWidget::onTransferAdded(int id)
     auto *sessionItem = new QStandardItem(transfer->sessionName);
     auto *progressItem = new QStandardItem;
     auto *statusItem = new QStandardItem(tr("Transferring…"));
+    m_rowById.insert(id, m_model->rowCount());
     m_model->appendRow({nameItem, directionItem, sessionItem, progressItem, statusItem});
+
+    ++m_activeCount;
+    refreshSummary();
     onTransferUpdated(id);
 }
 
@@ -86,6 +98,26 @@ void TransfersWidget::onTransferUpdated(int id)
     if (!transfer || row < 0) {
         return;
     }
+
+    // Incremental byte accounting for the overall bar.
+    AggState &st = m_agg[id];
+    if (transfer->bytesDone > st.done) {
+        m_totalDone += transfer->bytesDone - st.done;
+        st.done = transfer->bytesDone;
+    }
+    if (transfer->bytesTotal > 0 && st.total == 0) {
+        st.total = transfer->bytesTotal;
+        m_totalBytes += st.total;
+    }
+    if (transfer->finished && !st.countedFinished) {
+        st.countedFinished = true;
+        --m_activeCount;
+        ++m_finishedCount;
+        if (!transfer->ok) {
+            ++m_failedCount;
+        }
+    }
+    refreshSummary();
 
     const QLocale locale;
     QString progressText;
@@ -110,15 +142,69 @@ void TransfersWidget::onTransferUpdated(int id)
     }
 }
 
+void TransfersWidget::refreshSummary()
+{
+    if (m_activeCount == 0 && m_finishedCount == 0) {
+        m_summaryLabel->setText(tr("No transfers"));
+        m_overallBar->setValue(0);
+        return;
+    }
+    m_summaryLabel->setText(tr("%1 active · %2 done · %3 failed")
+                                .arg(m_activeCount)
+                                .arg(m_finishedCount - m_failedCount)
+                                .arg(m_failedCount));
+    if (m_totalBytes > 0) {
+        m_overallBar->setValue(static_cast<int>(m_totalDone * 100 / m_totalBytes));
+        m_overallBar->setFormat(QStringLiteral("%1 / %2 (%p%)")
+                                    .arg(QLocale().formattedDataSize(m_totalDone),
+                                         QLocale().formattedDataSize(m_totalBytes)));
+    } else {
+        m_overallBar->setValue(0);
+        m_overallBar->setFormat(QStringLiteral("%p%"));
+    }
+}
+
 void TransfersWidget::clearFinished()
 {
     for (int row = m_model->rowCount() - 1; row >= 0; --row) {
         const int id = m_model->item(row, 0)->data(kIdRole).toInt();
         const TransferRegistry::Transfer *transfer = TransferRegistry::instance().transfer(id);
         if (transfer && transfer->finished) {
+            m_agg.remove(id);
+            m_rowById.remove(id);
             m_model->removeRow(row);
         }
     }
+    // Rows shifted after removals; rebuild the id map.
+    m_rowById.clear();
+    for (int row = 0; row < m_model->rowCount(); ++row) {
+        m_rowById.insert(m_model->item(row, 0)->data(kIdRole).toInt(), row);
+    }
+    // Recount aggregates from what remains displayed.
+    m_totalDone = 0;
+    m_totalBytes = 0;
+    m_activeCount = 0;
+    m_finishedCount = 0;
+    m_failedCount = 0;
+    for (auto it = m_agg.cbegin(); it != m_agg.cend(); ++it) {
+        m_totalDone += it->done;
+        m_totalBytes += it->total;
+        if (it->countedFinished) {
+            ++m_finishedCount;
+        } else {
+            ++m_activeCount;
+        }
+    }
+    // Recompute failed count from the registry entries still shown.
+    m_failedCount = 0;
+    for (int row = 0; row < m_model->rowCount(); ++row) {
+        const int id = m_model->item(row, 0)->data(kIdRole).toInt();
+        const TransferRegistry::Transfer *transfer = TransferRegistry::instance().transfer(id);
+        if (transfer && transfer->finished && !transfer->ok) {
+            ++m_failedCount;
+        }
+    }
+    refreshSummary();
 }
 
 } // namespace hssh

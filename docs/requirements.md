@@ -54,57 +54,58 @@
 
 ### 3.1 连接与会话管理
 
-- [ ] 支持 SSH v2 协议。
-- [ ] 支持多种认证方式：
+- [x] 支持 SSH v2 协议。
+- [x] 支持多种认证方式：
   - 密码认证
   - 公钥认证（RSA / ECDSA / ED25519）
-  - 键盘交互认证（keyboard-interactive）
-  - GSSAPI / Kerberos 认证
-  - SSH agent 转发
-- [ ] 会话管理器：
+  - 键盘交互认证（keyboard-interactive，当前走密码通道）
+  - GSSAPI / Kerberos 认证（未实现）
+  - SSH agent 转发（未实现）
+- [x] 会话管理器：
   - 分组/标签树形结构
   - 快速搜索会话
   - 会话导入/导出
   - 会话历史记录
-- [ ] 自动登录：
+- [x] 自动登录：
   - 保存用户名/密码（可选主密码加密）
   - 自动执行登录后命令
-- [ ] 连接复用：
-  - SSH ControlMaster 支持
+- [x] 连接复用：
+  - SSH ControlMaster 支持（未实现）
   - 连接保活（KeepAlive）
   - 断线自动重连
 
 ### 3.2 终端仿真
 
-- [ ] 支持 VT100 / VT220 / VT340 / VT420 / VT520 / Xterm / Xterm-256color。
-- [ ] 支持 Unicode 13、Emoji、True Color。
+- [x] 支持 VT100 / VT220 / VT340 / VT420 / VT520 / Xterm / Xterm-256color（libvterm）。
+- [x] 支持 Unicode、Emoji、True Color（libvterm）。
 - [ ] 支持鼠标协议。
-- [ ] 支持滚动回滚（可配置行数，无限制）。
-- [ ] 支持多标签页、分屏（水平/垂直）。
-- [ ] 支持搜索、高亮、选中复制、右键粘贴。
+- [x] 支持滚动回滚（可配置行数，无限制）。
+- [x] 支持多标签页（分屏未实现）。
+- [x] 支持搜索、高亮、选中复制、右键粘贴。
 - [ ] 支持时间戳、输出折叠、大纲视图。
 - [ ] 支持自定义字体、颜色主题、背景透明度。
-- [ ] 支持 Powerline / Oh-My-Zsh / Oh-My-Posh 字体渲染。
-- [ ] 支持本地 Shell：
-  - Windows：Cmd / PowerShell / PowerShell Admin / WSL
-  - Linux/macOS：bash / zsh / fish / PowerShell Core
+- [ ] 调整宽度时内容重排（reflow）。
+- [x] 支持 Powerline / Oh-My-Zsh / Oh-My-Posh 字体渲染（libvterm）。
+- [x] 支持本地 Shell：
+  - Windows：Cmd / PowerShell / WSL（PowerShell 管理员未实现）
+  - Linux/macOS：bash / zsh / fish
 
 ### 3.3 文件传输
 
-- [ ] 内置 SFTP 客户端：
+- [x] 内置 SFTP 客户端：
   - 上传 / 下载 / 删除 / 重命名
   - 拖拽传输
-  - 断点续传
+  - 断点续传（未实现）
   - 批量队列
 - [ ] 支持 SCP。
 - [ ] 支持 ZMODEM / YMODEM / XMODEM（rz/sz）。
-- [ ] 本地文件管理器集成。
+- [x] 本地文件管理器集成。
 
 ### 3.4 端口转发与代理
 
-- [ ] 本地端口转发（Local Forward）。
-- [ ] 远程端口转发（Remote Forward）。
-- [ ] 动态端口转发（SOCKS5 Proxy / Dynamic Forward）。
+- [x] 本地端口转发（Local Forward）。
+- [x] 远程端口转发（Remote Forward）。
+- [x] 动态端口转发（SOCKS5 Proxy / Dynamic Forward）。
 - [ ] HTTP / SOCKS5 代理支持。
 - [ ] Jump Host / ProxyJump / ProxyCommand。
 - [ ] X11 转发。
@@ -112,22 +113,22 @@
 ### 3.5 高级功能
 
 - [ ] 命令面板（Command Palette）。
-- [ ] 命令发送器（批量发送命令到多个会话）。
+- [x] 命令发送器（批量发送命令到多个会话）。
 - [ ] 同步输入（Sync Input，多会话同时输入）。
 - [ ] 自由输入模式（Free Type Mode）。
-- [ ] 专注模式（Focus Mode）。
-- [ ] 会话日志记录（手动/自动）。
-- [ ] 屏幕锁定（Lock Screen）。
+- [x] 专注模式（Focus Mode）。
+- [x] 会话日志记录（手动/自动）（自动记录到 AppData/logs）。
+- [x] 屏幕锁定（Lock Screen）。
 - [ ] 脚本与宏（Script / Macro）。
 - [ ] 插件系统（Plugin System）。
 - [ ] Tmux 集成。
 
 ### 3.6 安全
 
-- [ ] 主密码保护（AES-256-GCM 加密用户数据）。
+- [x] 主密码保护（AES-256-GCM 加密用户数据）。
 - [ ] SSH 密钥管理器（生成、导入、导出、Agent 转发）。
 - [ ] 支持 FIDO2 / YubiKey（未来扩展）。
-- [ ] 不收集用户数据，完全本地运行。
+- [x] 不收集用户数据，完全本地运行。
 
 ---
 
@@ -141,23 +142,23 @@ hssh 不仅是一个 GUI 客户端，还应该是一个**可被外部工具调�
 
 #### 4.2.1 MCP 服务器（Model Context Protocol）
 
-- [ ] 实现 MCP 服务器，暴露以下能力：
-  - `ssh_connect(host, user, auth)`：建立 SSH 连接
-  - `ssh_exec(session_id, command)`：执行远程命令
-  - `ssh_shell(session_id, command)`：启动交互式 Shell
-  - `ssh_upload(session_id, local_path, remote_path)`：上传文件
-  - `ssh_download(session_id, remote_path, local_path)`：下载文件
-  - `ssh_forward(session_id, type, local, remote)`：端口转发
-  - `ssh_disconnect(session_id)`：断开连接
-  - `list_sessions()`：列出活跃会话
-- [ ] 支持 STDIO 和 SSE 两种 MCP 传输方式。
-- [ ] 提供 MCP 配置文件示例，方便 Claude Code 接入。
+- [x] 实现 MCP 服务器（stdio），暴露以下能力：
+  - [x] `ssh_connect(host, user, auth)`：建立 SSH 连接
+  - [x] `ssh_exec(session_id, command)`：执行远程命令
+  - [ ] `ssh_shell(session_id, command)`：启动交互式 Shell
+  - [x] `ssh_upload(session_id, local_path, remote_path)`：上传文件
+  - [x] `ssh_download(session_id, remote_path, local_path)`：下载文件
+  - [ ] `ssh_forward(session_id, type, local, remote)`：端口转发
+  - [x] `ssh_disconnect(session_id)`：断开连接
+  - [x] `list_sessions()`：列出活跃会话
+- [x] 支持 STDIO（SSE 待实现）MCP 传输方式。
+- [x] 提供 MCP 配置文件示例，方便 Claude Code 接入（见 docs/agent.md）。
 
 #### 4.2.2 REST API
 
-- [ ] 本地 HTTP 服务（默认 `127.0.0.1:8222`，可配置）。
-- [ ] 提供 RESTful API，返回 JSON。
-- [ ] API 鉴权：Token / Basic Auth / mTLS。
+- [x] 本地 HTTP 服务（默认 `127.0.0.1:8222`，可配置）。
+- [x] 提供 RESTful API，返回 JSON。
+- [x] API 鉴权：Token / Basic Auth / mTLS（Token 已实现）。
 - [ ] 支持 WebSocket 进行实时 Shell 交互。
 
 #### 4.2.3 gRPC 接口（可选）
@@ -167,16 +168,18 @@ hssh 不仅是一个 GUI 客户端，还应该是一个**可被外部工具调�
 
 #### 4.2.4 CLI 子命令
 
-- [ ] 提供 `hssh cli exec --host ... --command ...` 等非交互式命令。
-- [ ] 支持 JSON 输出，方便脚本解析。
+- [x] 提供 `hssh cli exec --host ... --command ...` 等非交互式命令。
+- [x] 支持 JSON 输出，方便脚本解析。
 
 ### 4.3 Agent 安全模型
 
-- [ ] Agent 默认关闭，需用户手动启用。
-- [ ] 仅监听 `127.0.0.1`，不暴露到公网。
+- [x] Agent 默认关闭，需用户手动启用（可勾选随 GUI 自启）。
+- [x] 仅监听 `127.0.0.1`，不暴露到公网。
+- [x] 密码不明文传输（RSA 密文通道 / 会话名引用 / 库内凭据不出进程）。
+- [x] sudo 操作需用户确认（GUI 弹窗，会话内免重复）。
 - [ ] 所有远程操作需用户授权（首次使用时弹窗确认，可配置白名单）。
 - [ ] 敏感操作（上传/下载/端口转发）需要二次确认。
-- [ ] 操作审计日志：记录所有通过 Agent 执行的命令和文件传输。
+- [x] 操作审计日志：记录所有通过 Agent 执行的命令和文件传输（AppData/logs/agent_audit.log）。
 
 ### 4.4 与 Claude Code 集成示例
 

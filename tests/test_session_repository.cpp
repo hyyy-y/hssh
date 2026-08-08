@@ -138,6 +138,139 @@ private slots:
         QCOMPARE(data.folderNames.size(), 1);
     }
 
+    void testKeepAliveAndReconnectFields()
+    {
+        SessionRepository repo;
+        QVERIFY(repo.initialize());
+
+        SessionConfig config;
+        config.setName(QStringLiteral("Robust"));
+        config.setHost(QStringLiteral("host.example"));
+        config.setKeepAliveSeconds(60);
+        config.setAutoReconnect(true);
+        QVERIFY(repo.saveSession(config));
+
+        const SessionConfig loaded = repo.loadSession(config.id());
+        QCOMPARE(loaded.keepAliveSeconds(), 60);
+        QVERIFY(loaded.autoReconnect());
+    }
+
+    void testPasswordEncryptedAtRest()
+    {
+        SessionRepository repo;
+        QVERIFY(repo.initialize());
+
+        SessionConfig config;
+        config.setName(QStringLiteral("Secret"));
+        config.setHost(QStringLiteral("host.example"));
+        config.setPassword(SecureString(QStringLiteral("p@ssw0rd")));
+        QVERIFY(repo.saveSession(config));
+
+        // The raw database value must be an encrypted blob, not plaintext.
+        QSqlQuery query(QSqlDatabase::database(QStringLiteral("hssh_default"), false));
+        query.prepare(QStringLiteral("SELECT password_encrypted FROM sessions WHERE id = :id"));
+        query.bindValue(QStringLiteral(":id"), config.id());
+        QVERIFY(query.exec() && query.next());
+        const QByteArray stored = query.value(0).toByteArray();
+        QVERIFY(stored.startsWith("HSE1"));
+        QVERIFY(!stored.contains("p@ssw0rd"));
+
+        // ...and the repository decrypts it transparently on load.
+        const SessionConfig loaded = repo.loadSession(config.id());
+        QCOMPARE(loaded.password().toString(), QStringLiteral("p@ssw0rd"));
+    }
+
+    // Regression: a session without a key passphrase must not have its
+    // password re-encrypted by repeated initialize() calls.
+    void testMigrationIsIdempotent()
+    {
+        SessionRepository repo;
+        QVERIFY(repo.initialize());
+
+        SessionConfig config;
+        config.setName(QStringLiteral("NoPassphrase"));
+        config.setHost(QStringLiteral("host.example"));
+        config.setPassword(SecureString(QStringLiteral("p@ssw0rd")));
+        // Empty key passphrase (the case that broke the first migration).
+        QVERIFY(repo.saveSession(config));
+
+        const auto blob = [this, &config]() {
+            QSqlQuery query(QSqlDatabase::database(QStringLiteral("hssh_default"), false));
+            query.prepare(QStringLiteral("SELECT password_encrypted FROM sessions WHERE id = :id"));
+            query.bindValue(QStringLiteral(":id"), config.id());
+            return query.exec() && query.next() ? query.value(0).toByteArray() : QByteArray();
+        };
+
+        const QByteArray first = blob();
+        QVERIFY(first.startsWith("HSE1"));
+
+        // A second initialize (simulating an app restart) must not alter
+        // the blob.
+        SessionRepository repo2;
+        QVERIFY(repo2.initialize());
+        QCOMPARE(blob(), first);
+
+        const SessionConfig loaded = repo2.loadSession(config.id());
+        QCOMPARE(loaded.password().toString(), QStringLiteral("p@ssw0rd"));
+    }
+
+    void testExportImport()
+    {
+        SessionRepository repo;
+        QVERIFY(repo.initialize());
+
+        const QString folderId = repo.addFolder(QStringLiteral("Prod"));
+        SessionConfig config;
+        config.setName(QStringLiteral("Web"));
+        config.setHost(QStringLiteral("web.example"));
+        config.setUsername(QStringLiteral("deploy"));
+        config.setGroup(folderId);
+        QVERIFY(repo.saveSession(config));
+
+        const QString exportPath = m_tempFile->fileName() + QStringLiteral(".export.json");
+        QVERIFY(repo.exportSessionsToJson(exportPath));
+
+        // Import into a fresh database.
+        Database::setDefaultDatabasePath(QString());
+        m_tempFile.reset();
+        m_tempFile = std::make_unique<QTemporaryFile>(QDir::tempPath() + QStringLiteral("/hssh_test_import_XXXXXX.db"));
+        QVERIFY(m_tempFile->open());
+        m_tempFile->close();
+        Database::setDefaultDatabasePath(m_tempFile->fileName());
+
+        SessionRepository imported;
+        QVERIFY(imported.initialize());
+        QVERIFY(imported.importSessionsFromJson(exportPath));
+
+        const SessionRepository::TreeData data = imported.loadTree();
+        QCOMPARE(data.sessions.size(), 1);
+        QCOMPARE(data.sessions.first().name(), QStringLiteral("Web"));
+        QCOMPARE(data.sessions.first().host(), QStringLiteral("web.example"));
+        QCOMPARE(data.sessions.first().group(), folderId);
+        QCOMPARE(data.folderNames.size(), 1);
+        QCOMPARE(data.folderNames.value(folderId), QStringLiteral("Prod"));
+
+        QFile::remove(exportPath);
+    }
+
+    void testRemoveFolderCascadesSessions()
+    {
+        SessionRepository repo;
+        QVERIFY(repo.initialize());
+
+        const QString folderId = repo.addFolder(QStringLiteral("Temp"));
+        SessionConfig config;
+        config.setName(QStringLiteral("Inner"));
+        config.setHost(QStringLiteral("inner.local"));
+        config.setGroup(folderId);
+        QVERIFY(repo.saveSession(config));
+
+        QVERIFY(repo.removeFolder(folderId));
+        const SessionRepository::TreeData data = repo.loadTree();
+        QCOMPARE(data.sessions.size(), 0);
+        QCOMPARE(data.folderNames.size(), 0);
+    }
+
 private:
     std::unique_ptr<QTemporaryFile> m_tempFile;
 };

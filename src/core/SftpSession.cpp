@@ -400,6 +400,10 @@ bool SftpSession::collectRemoteFiles(const QString &remoteDir, const QString &re
         } else {
             out.append({remoteChild, relChild, size, mtime, false});
         }
+        ++m_treeWalkCount;
+        if ((m_treeWalkCount & 0x3F) == 0) {
+            emit dirTreeProgress(m_treeWalkPath, m_treeWalkCount);
+        }
         if (m_cancelTransfer) {
             ok = false;
         }
@@ -421,6 +425,8 @@ void SftpSession::doListDirRecursive(const QString &path)
     }
     QList<RemoteFileEntry> entries;
     QString error;
+    m_treeWalkCount = 0;
+    m_treeWalkPath = path;
     if (!collectRemoteFiles(path, QString(), entries, error, true)) {
         emit errorOccurred(error);
         return;

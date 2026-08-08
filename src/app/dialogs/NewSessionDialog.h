@@ -5,6 +5,7 @@
 
 #include <QDialog>
 
+class QCheckBox;
 class QComboBox;
 class QLineEdit;
 class QSpinBox;
@@ -33,6 +34,8 @@ private:
     QLineEdit *m_passwordEdit = nullptr;
     QLineEdit *m_keyPathEdit = nullptr;
     QLineEdit *m_keyPassphraseEdit = nullptr;
+    QSpinBox *m_keepAliveSpin = nullptr;
+    QCheckBox *m_autoReconnectCheck = nullptr;
 
     SessionConfig m_config;
 };

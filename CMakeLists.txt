@@ -60,6 +60,16 @@ endif()
 # Source files
 set(HSSH_SOURCES
     src/main.cpp
+    src/agent/AgentAudit.cpp
+    src/agent/AgentAudit.h
+    src/agent/AgentHttpServer.cpp
+    src/agent/AgentHttpServer.h
+    src/agent/AgentMcpServer.cpp
+    src/agent/AgentMcpServer.h
+    src/agent/AgentSession.cpp
+    src/agent/AgentSession.h
+    src/agent/AgentSessionRegistry.cpp
+    src/agent/AgentSessionRegistry.h
     src/app/MainWindow.cpp
     src/app/MainWindow.h
     src/app/SessionTab.cpp
@@ -70,6 +80,8 @@ set(HSSH_SOURCES
     src/app/dialogs/DiffDialog.h
     src/app/dialogs/NewSessionDialog.cpp
     src/app/dialogs/NewSessionDialog.h
+    src/app/dialogs/PortForwardDialog.cpp
+    src/app/dialogs/PortForwardDialog.h
     src/app/widgets/DiffView.cpp
     src/app/widgets/DiffView.h
     src/app/widgets/FileCompareWidget.cpp
@@ -86,6 +98,8 @@ set(HSSH_SOURCES
     src/app/TransferRegistry.h
     src/core/ConnectionManager.cpp
     src/core/ConnectionManager.h
+    src/core/PortForward.cpp
+    src/core/PortForward.h
     src/core/SessionConfig.cpp
     src/core/SessionConfig.h
     src/core/SessionModel.cpp
@@ -150,6 +164,9 @@ if(libssh_FOUND)
         ${libssh_SOURCE_DIR}/include
         ${libssh_BINARY_DIR}/include
     )
+    if(DEFINED mbedtls_SOURCE_DIR)
+        target_include_directories(${PROJECT_NAME} PRIVATE ${mbedtls_SOURCE_DIR}/include)
+    endif()
     target_link_libraries(${PROJECT_NAME} PRIVATE ssh)
 endif()
 

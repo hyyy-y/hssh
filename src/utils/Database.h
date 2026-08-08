@@ -30,6 +30,7 @@ public:
 
 private:
     bool createSchema();
+    bool migrateSchema();
 
     QString m_connectionName;
     QSqlDatabase m_db;

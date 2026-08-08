@@ -7,6 +7,7 @@
 
 #include <QColor>
 #include <QHash>
+#include <QSet>
 #include <QWidget>
 
 QT_BEGIN_NAMESPACE
@@ -41,6 +42,8 @@ public:
     void uploadTo(const QString &localPath, const QString &remotePath);
     // Recursive remote tree listing (folder compare); result via dirTreeListed.
     void listDirTree(const QString &path);
+    // mkdir -p for a remote path (parent directories created as needed).
+    void ensureRemoteDir(const QString &path);
     // Compare highlighting: filename -> text color; empty map clears.
     void setRowColors(const QHash<QString, QColor> &colors);
     [[nodiscard]] QList<SftpFileInfo> selectedEntries() const;
@@ -54,6 +57,8 @@ signals:
     void transferDone(const QString &remotePath, bool ok);
     // Forwarded from the session for listDirTree().
     void dirTreeListed(const QString &path, const QList<hssh::RemoteFileEntry> &entries);
+    // Forwarded progress during a recursive tree walk.
+    void dirTreeProgress(const QString &path, int entriesScanned);
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -83,7 +88,9 @@ private:
     void onTransferFinished(const QString &path, bool ok, const QString &message);
 
     [[nodiscard]] QString remoteJoin(const QString &dir, const QString &name) const;
-    void trackTransfer(const QString &remotePath, TransferRegistry::Direction direction);
+    // quiet=true for compare/sync-driven transfers: no per-file progress
+    // dialog, the Transfers panel carries the progress display.
+    void trackTransfer(const QString &remotePath, TransferRegistry::Direction direction, bool quiet = false);
     QProgressDialog *ensureProgressDialog();
     static QString formatPermissions(quint32 mode, bool isDir);
 
@@ -101,6 +108,7 @@ private:
     QList<SftpFileInfo> m_entries; // row-aligned with the model
     QHash<QString, QColor> m_rowColors;
     QHash<QString, int> m_transferIds; // remote path -> TransferRegistry id
+    QSet<int> m_quietTransfers;        // transfer ids that never pop the progress dialog
     bool m_transferInProgress = false;
 };
 

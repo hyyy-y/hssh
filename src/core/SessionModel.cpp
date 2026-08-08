@@ -235,6 +235,15 @@ SessionModel::NodeType SessionModel::nodeType(const QModelIndex &index) const
     return node->type;
 }
 
+QString SessionModel::nodeId(const QModelIndex &index) const
+{
+    SessionNode *node = nodeFromIndex(index);
+    if (!node || node == m_root.get()) {
+        return {};
+    }
+    return node->id;
+}
+
 void SessionModel::clear()
 {
     beginResetModel();
@@ -257,7 +266,9 @@ QList<SessionConfig> SessionModel::allSessions() const
     return result;
 }
 
-void SessionModel::loadSessions(const QList<SessionConfig> &sessions, const QMap<QString, QString> &folderPaths)
+void SessionModel::loadSessions(const QList<SessionConfig> &sessions,
+                                const QMap<QString, QString> &folderPaths,
+                                const QMap<QString, QString> &folderNames)
 {
     beginResetModel();
     m_root->children.clear();
@@ -265,17 +276,23 @@ void SessionModel::loadSessions(const QList<SessionConfig> &sessions, const QMap
     QMap<QString, SessionNode *> folderMap;
     folderMap[QStringLiteral("root")] = m_root.get();
 
-    // First pass: create folders
+    // First pass: create every folder node, detached. Parents can appear
+    // after children in id order, so two passes are required.
     for (auto it = folderPaths.cbegin(); it != folderPaths.cend(); ++it) {
         const QString folderId = it.key();
-        const QString parentId = it.value();
-        SessionNode *parentNode = folderMap.value(parentId, m_root.get());
-
-        auto *folderNode = new SessionNode(NodeType::Folder, parentNode);
+        auto *folderNode = new SessionNode(NodeType::Folder);
         folderNode->id = folderId;
-        folderNode->name = folderId; // Name resolved later; placeholder
-        parentNode->children.append(folderNode);
+        folderNode->name = folderNames.value(folderId, folderId);
         folderMap[folderId] = folderNode;
+    }
+
+    // Second pass: attach folders to their parents (fall back to root when
+    // the parent is missing from the map).
+    for (auto it = folderPaths.cbegin(); it != folderPaths.cend(); ++it) {
+        SessionNode *folderNode = folderMap.value(it.key());
+        SessionNode *parentNode = folderMap.value(it.value(), m_root.get());
+        folderNode->parent = parentNode;
+        parentNode->children.append(folderNode);
     }
 
     // Second pass: create sessions

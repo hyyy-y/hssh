@@ -46,11 +46,15 @@ public:
 
     [[nodiscard]] SessionConfig sessionConfig(const QModelIndex &index) const;
     [[nodiscard]] NodeType nodeType(const QModelIndex &index) const;
+    // Stable id of the node (folder id for folders, session id for sessions).
+    [[nodiscard]] QString nodeId(const QModelIndex &index) const;
 
     void clear();
 
     [[nodiscard]] QList<SessionConfig> allSessions() const;
-    void loadSessions(const QList<SessionConfig> &sessions, const QMap<QString, QString> &folderPaths);
+    void loadSessions(const QList<SessionConfig> &sessions,
+                      const QMap<QString, QString> &folderPaths,
+                      const QMap<QString, QString> &folderNames = {});
 
 private:
     SessionNode *nodeFromIndex(const QModelIndex &index) const;

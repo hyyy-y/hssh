@@ -10,6 +10,7 @@ set(COMMON_SOURCES
     ../src/core/SessionConfig.cpp
     ../src/core/SessionModel.cpp
     ../src/core/SessionRepository.cpp
+    ../src/core/PortForward.cpp
     ../src/core/SftpSession.cpp
     ../src/core/SshConnect.cpp
     ../src/core/SshSession.cpp
@@ -48,6 +49,9 @@ if(libssh_FOUND)
         ${libssh_SOURCE_DIR}/include
         ${libssh_BINARY_DIR}/include
     )
+    if(DEFINED mbedtls_SOURCE_DIR)
+        list(APPEND COMMON_INCLUDES ${mbedtls_SOURCE_DIR}/include)
+    endif()
 endif()
 if(libvterm_FOUND)
     list(APPEND COMMON_INCLUDES ${VTERM_SOURCE_DIR}/include)
@@ -57,6 +61,7 @@ set(COMMON_LIBS
     Qt::Core
     Qt::Gui
     Qt::Widgets
+    Qt::Network
     Qt::Test
     Qt::Sql
 )

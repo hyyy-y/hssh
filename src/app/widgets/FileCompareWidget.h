@@ -12,10 +12,12 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QProgressBar;
+class QStandardItem;
 class QStandardItemModel;
 class QStackedWidget;
-class QTableView;
 class QTemporaryFile;
+class QTreeView;
 QT_END_NAMESPACE
 
 namespace hssh {
@@ -43,6 +45,14 @@ public:
     // menu). No-op while the session is still connecting.
     void navigateRemote(const QString &path);
 
+    // IDEA-style per-row sync action: the arrow column shows and edits the
+    // action (click or Space to cycle → / ← / ⊘).
+    enum class SyncAction {
+        Upload,   // copy to remote (→)
+        Download, // copy to local (←)
+        Skip      // do nothing (⊘)
+    };
+
     enum class CompareStatus { Same, Different, OnlyLocal, OnlyRemote };
 
 private:
@@ -64,8 +74,22 @@ private:
     void startFolderCompare(const QString &localDir, const QString &remoteDir);
     void onTreePathsEdited();
     void onDirTreeListed(const QString &path, const QList<RemoteFileEntry> &entries);
+    void onDirTreeProgress(const QString &path, int entriesScanned);
     void rebuildTreeModel();
     void onTreeActivated(const QModelIndex &index);
+    void onTreeContextMenu(const QPoint &pos);
+    void cycleRowAction(const QModelIndex &index);
+    // Builds the 7 mirrored columns for one tree node (file or folder).
+    QList<QStandardItem *> makeTreeRowItems(int rowIndex, const QString &displayName) const;
+    // Maps any cell index to the CompareRow index (UserRole lives on column 0).
+    [[nodiscard]] int compareRowFromIndex(const QModelIndex &index) const;
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    // Sync selected rows (or every differing row when nothing is selected)
+    // in one direction, with one batch confirmation. Only files are synced;
+    // directories are created implicitly by the transfers.
+    void syncSelection(bool toRemote);
+    void startSyncBatch(const QList<int> &targets, bool toRemote);
+    void pumpSyncQueue();
     void backToBrowse();
 
     [[nodiscard]] QString remoteJoin(const QString &dir, const QString &name) const;
@@ -74,6 +98,7 @@ private:
         QString relPath;
         bool isDir = false;
         CompareStatus status = CompareStatus::Same;
+        SyncAction action = SyncAction::Skip;
         qint64 localSize = -1;  // -1 = absent
         qint64 remoteSize = -1;
         qint64 localMtime = 0;
@@ -89,12 +114,13 @@ private:
 
     // Folder compare page state.
     QStackedWidget *m_stack = nullptr;
-    QTableView *m_treeView = nullptr;
+    QTreeView *m_treeView = nullptr;
     QStandardItemModel *m_treeModel = nullptr;
     QLineEdit *m_filterEdit = nullptr;
     QCheckBox *m_hideSameCheck = nullptr;
     QLineEdit *m_localPathEdit = nullptr;
     QLineEdit *m_remotePathEdit = nullptr;
+    QProgressBar *m_analysisProgress = nullptr;
     DiffView *m_diffView = nullptr;
     QString m_treeLocalRoot;
     QString m_treeRemoteRoot;
@@ -105,7 +131,16 @@ private:
     QTemporaryFile *m_diffTemp = nullptr;
     QString m_diffRemotePath;
     QString m_diffLocalPath;
-    bool m_diffInline = false; // true: result goes to the inline DiffView
+    bool m_diffInline = false;     // true: result goes to the inline DiffView
+    bool m_diffRemoteOnly = false; // true: the row exists only on the remote side
+
+    // Sync batch state: rows are transferred in small timed batches so the
+    // GUI stays responsive even with tens of thousands of files.
+    QList<int> m_syncQueue;
+    bool m_syncToRemote = false;
+    int m_syncTotal = 0;
+    int m_syncDone = 0;
+    QTimer *m_syncTimer = nullptr;
 };
 
 } // namespace hssh
