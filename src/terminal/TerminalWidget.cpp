@@ -6,6 +6,7 @@
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
@@ -122,6 +123,9 @@ void TerminalWidget::feedData(const QByteArray &data)
         vterm_input_write(m_vterm, data.constData(), static_cast<size_t>(data.size()));
         vterm_screen_flush_damage(m_screen);
         scrollToBottom();
+        // Matches may point at rows that were just pushed out of the buffer;
+        // they are rebuilt on the next search action.
+        m_searchRowMatches.clear();
     }
 #else
     Q_UNUSED(data)
@@ -227,14 +231,29 @@ void TerminalWidget::drawCellRun(QPainter *painter, int row, int startCol, int s
 
 template <typename Fetch>
 void TerminalWidget::paintRowCells(QPainter *painter, int row, int startCol, int endCol,
-                                   int selStartCol, int selEndCol, Fetch &&fetch)
+                                   int selStartCol, int selEndCol,
+                                   const QVector<int> &searchMatches, Fetch &&fetch)
 {
     // fetch(col) returns std::optional<PaintCell>; nullopt = blank grid cell.
     // Cells between selStartCol/selEndCol (inclusive, -1 = no selection)
-    // are painted with the selection background.
-    const auto selected = [this, selStartCol, selEndCol](std::optional<PaintCell> &pc, int col) {
-        if (pc && selStartCol >= 0 && col >= selStartCol && col <= selEndCol) {
+    // are painted with the selection background; search matches (flat
+    // [start,end,...] pairs) get the search background unless selected.
+    const auto searched = [&searchMatches](int col) {
+        for (int i = 0; i < searchMatches.size(); i += 2) {
+            if (col >= searchMatches.at(i) && col <= searchMatches.at(i + 1)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const auto selected = [this, selStartCol, selEndCol, &searched](std::optional<PaintCell> &pc, int col) {
+        if (!pc) {
+            return;
+        }
+        if (selStartCol >= 0 && col >= selStartCol && col <= selEndCol) {
             pc->bg = m_selectionBg;
+        } else if (searched(col)) {
+            pc->bg = m_searchBg;
         }
     };
 
@@ -247,6 +266,10 @@ void TerminalWidget::paintRowCells(QPainter *painter, int row, int startCol, int
                 painter->fillRect(QRect(m_margin + col * m_cellWidth, m_margin + row * m_cellHeight,
                                         m_cellWidth, m_cellHeight),
                                   m_selectionBg);
+            } else if (searched(col)) {
+                painter->fillRect(QRect(m_margin + col * m_cellWidth, m_margin + row * m_cellHeight,
+                                        m_cellWidth, m_cellHeight),
+                                  m_searchBg);
             }
             ++col;
             continue;
@@ -339,6 +362,12 @@ void TerminalWidget::renderToPainter(QPainter *painter, const QRect &rect)
         int selStart = -1, selEnd = -1;
         selectionRangeForRow(logicalRow, selStart, selEnd);
 
+        static const QVector<int> kNoMatches;
+        const QVector<int> &searchMatches =
+            (logicalRow >= 0 && logicalRow < m_searchRowMatches.size())
+                ? m_searchRowMatches.at(logicalRow)
+                : kNoMatches;
+
         if (logicalRow >= 0 && logicalRow < scrollbackSize) {
             const auto &line = m_scrollback[logicalRow];
             // The line stores one entry per glyph (wide-char continuation
@@ -352,7 +381,7 @@ void TerminalWidget::renderToPainter(QPainter *painter, const QRect &rect)
                 grid[static_cast<size_t>(gridCol)] = &cell;
                 gridCol += cell.width > 0 ? cell.width : 1;
             }
-            paintRowCells(painter, row, startCol, endCol, selStart, selEnd,
+            paintRowCells(painter, row, startCol, endCol, selStart, selEnd, searchMatches,
                           [this, &grid](int col) -> std::optional<PaintCell> {
                               const ScrollbackCell *cell = grid[static_cast<size_t>(col)];
                               if (!cell || cell->width == 0) {
@@ -367,7 +396,7 @@ void TerminalWidget::renderToPainter(QPainter *painter, const QRect &rect)
         if (vtermRow < 0 || vtermRow >= m_rows)
             continue;
 
-        paintRowCells(painter, row, startCol, endCol, selStart, selEnd,
+        paintRowCells(painter, row, startCol, endCol, selStart, selEnd, searchMatches,
                       [this, vtermRow](int col) -> std::optional<PaintCell> {
                           VTermPos pos = {vtermRow, col};
                           VTermScreenCell cell;
@@ -407,6 +436,10 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event)
 
     // Clipboard shortcuts.
     const Qt::KeyboardModifiers mods = event->modifiers();
+    if (mods == Qt::ControlModifier && event->key() == Qt::Key_F) {
+        showSearchBar();
+        return;
+    }
     if (mods == (Qt::ControlModifier | Qt::ShiftModifier)) {
         if (event->key() == Qt::Key_C) {
             copySelectionToClipboard();
@@ -543,6 +576,9 @@ void TerminalWidget::resizeEvent(QResizeEvent *event)
     QWidget::resizeEvent(event);
     const int scrollBarWidth = style()->pixelMetric(QStyle::PM_ScrollBarExtent);
     m_scrollBar->setGeometry(width() - scrollBarWidth, 0, scrollBarWidth, height());
+    if (m_searchBar) {
+        m_searchBar->move(qMax(8, width() - m_searchBar->width() - 16), 8);
+    }
 #ifdef HSSH_HAS_LIBVTERM
     updateTerminalSize();
 #endif
@@ -688,12 +724,17 @@ void TerminalWidget::contextMenuEvent(QContextMenuEvent *event)
     copyAction->setEnabled(m_hasSelection);
     QAction *pasteAction = menu.addAction(tr("Paste"));
     pasteAction->setEnabled(!QGuiApplication::clipboard()->text().isEmpty());
+    menu.addSeparator();
+    QAction *findAction = menu.addAction(tr("Find..."));
+    findAction->setShortcut(QKeySequence::Find);
 
     const QAction *chosen = menu.exec(event->globalPos());
     if (chosen == copyAction) {
         copySelectionToClipboard();
     } else if (chosen == pasteAction) {
         pasteFromClipboard();
+    } else if (chosen == findAction) {
+        showSearchBar();
     }
 }
 
@@ -764,6 +805,182 @@ QString TerminalWidget::lineTextRange(int logicalRow, int startCol, int endCol) 
     Q_UNUSED(endCol)
     return {};
 #endif
+}
+
+QString TerminalWidget::lineText(int logicalRow) const
+{
+    return lineTextRange(logicalRow, 0, m_cols - 1);
+}
+
+QString TerminalWidget::bufferText(int maxLines) const
+{
+    return bufferTextRange(0, maxLines);
+}
+
+QString TerminalWidget::bufferTextRange(int fromLine, int maxLines) const
+{
+#ifdef HSSH_HAS_LIBVTERM
+    const int totalRows = static_cast<int>(m_scrollback.size()) + m_rows;
+    if (totalRows <= 0) {
+        return {};
+    }
+
+    QStringList lines;
+    lines.reserve(totalRows);
+    for (int row = 0; row < totalRows; ++row) {
+        QString line = lineText(row);
+        // Trailing blanks are cell padding, not content.
+        while (line.endsWith(QLatin1Char(' '))) {
+            line.chop(1);
+        }
+        lines.append(line);
+    }
+    // Drop fully-empty lines at both ends (unused scrollback/screen rows) so
+    // a partially filled screen still returns its content.
+    while (!lines.isEmpty() && lines.first().isEmpty()) {
+        lines.removeFirst();
+    }
+    while (!lines.isEmpty() && lines.last().isEmpty()) {
+        lines.removeLast();
+    }
+    if (fromLine > 0) {
+        if (fromLine >= lines.size()) {
+            return {};
+        }
+        lines = lines.mid(fromLine);
+    }
+    if (maxLines > 0 && lines.size() > maxLines) {
+        lines = lines.mid(lines.size() - maxLines);
+    }
+    return lines.join(QLatin1Char('\n'));
+#else
+    Q_UNUSED(fromLine)
+    Q_UNUSED(maxLines)
+    return {};
+#endif
+}
+
+void TerminalWidget::showSearchBar()
+{
+    if (m_searchBar) {
+        m_searchBar->setFocus();
+        m_searchBar->selectAll();
+        return;
+    }
+
+    m_searchBar = new QLineEdit(this);
+    m_searchBar->setPlaceholderText(tr("Find... (Enter next, Shift+Enter previous, Esc close)"));
+    m_searchBar->setFixedWidth(300);
+    m_searchBar->setClearButtonEnabled(true);
+    m_searchBar->installEventFilter(this);
+    m_searchBar->show();
+    m_searchBar->setFocus();
+    m_searchBar->move(qMax(8, width() - m_searchBar->width() - 16), 8);
+
+    connect(m_searchBar, &QLineEdit::textChanged, this, &TerminalWidget::updateSearch);
+    connect(m_searchBar, &QLineEdit::returnPressed, this, &TerminalWidget::searchNext);
+}
+
+void TerminalWidget::closeSearchBar()
+{
+    if (!m_searchBar) {
+        return;
+    }
+    m_searchBar->removeEventFilter(this);
+    m_searchBar->deleteLater();
+    m_searchBar = nullptr;
+    m_searchText.clear();
+    m_searchMatches.clear();
+    m_searchRowMatches.clear();
+    m_currentMatch = -1;
+    update();
+    setFocus();
+}
+
+void TerminalWidget::updateSearch(const QString &text)
+{
+    m_searchText = text;
+    m_searchMatches.clear();
+    m_searchRowMatches.clear();
+    m_currentMatch = -1;
+
+    if (text.isEmpty()) {
+        update();
+        return;
+    }
+
+    const int totalRows = static_cast<int>(m_scrollback.size()) + m_rows;
+    m_searchRowMatches.resize(totalRows);
+    for (int row = 0; row < totalRows; ++row) {
+        const QString line = lineText(row);
+        int from = 0;
+        while ((from = line.indexOf(text, from, Qt::CaseInsensitive)) >= 0) {
+            const int end = from + text.size() - 1;
+            m_searchMatches << row << from << end;
+            m_searchRowMatches[row] << from << end;
+            from = end + 2;
+        }
+    }
+
+    if (!m_searchMatches.isEmpty()) {
+        jumpToMatch(0);
+    } else {
+        update();
+    }
+}
+
+bool TerminalWidget::searchNext()
+{
+    if (m_searchMatches.isEmpty()) {
+        return false;
+    }
+    const int count = m_searchMatches.size() / 3;
+    jumpToMatch((m_currentMatch + 1) % count);
+    return true;
+}
+
+bool TerminalWidget::searchPrevious()
+{
+    if (m_searchMatches.isEmpty()) {
+        return false;
+    }
+    const int count = m_searchMatches.size() / 3;
+    jumpToMatch(m_currentMatch <= 0 ? count - 1 : m_currentMatch - 1);
+    return true;
+}
+
+void TerminalWidget::jumpToMatch(int matchIndex)
+{
+    if (m_searchMatches.isEmpty()) {
+        return;
+    }
+    m_currentMatch = matchIndex;
+    const int row = m_searchMatches.at(matchIndex * 3);
+
+    // Bring the match row into view: scrollbar value equals the logical row
+    // when that row sits at the top of the viewport.
+    m_scrollBar->setValue(qBound(m_scrollBar->minimum(), row, m_scrollBar->maximum()));
+    update();
+}
+
+bool TerminalWidget::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_searchBar && event->type() == QEvent::KeyPress) {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->key() == Qt::Key_Escape) {
+            closeSearchBar();
+            return true;
+        }
+        if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
+            if (keyEvent->modifiers() & Qt::ShiftModifier) {
+                searchPrevious();
+            } else {
+                searchNext();
+            }
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 QString TerminalWidget::selectedText() const

@@ -7,6 +7,7 @@
 #include <QWidget>
 
 class QLineEdit;
+class QSortFilterProxyModel;
 class QTreeView;
 
 namespace hssh {
@@ -38,6 +39,7 @@ private:
     QTreeView *m_treeView = nullptr;
     QLineEdit *m_searchEdit = nullptr;
     SessionModel *m_model = nullptr;
+    QSortFilterProxyModel *m_proxy = nullptr;
 };
 
 } // namespace hssh

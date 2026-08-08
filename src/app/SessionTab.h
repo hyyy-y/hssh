@@ -7,6 +7,7 @@
 
 namespace hssh {
 
+class SshSession;
 class SessionConfig;
 class TerminalSession;
 
@@ -20,6 +21,11 @@ public:
     [[nodiscard]] static SessionTab *createLocal(const QString &shellType, QWidget *parent = nullptr);
 
     [[nodiscard]] SessionConfig config() const;
+    // Non-null when this tab runs an SSH shell backed by libssh.
+    [[nodiscard]] SshSession *sshSession() const;
+    // Plain-text dump of the terminal buffer (last maxLines rows).
+    [[nodiscard]] QString readTerminalText(int maxLines) const;
+    [[nodiscard]] QString readTerminalTextRange(int fromLine, int maxLines) const;
 
 signals:
     void sizeChanged(int columns, int rows);

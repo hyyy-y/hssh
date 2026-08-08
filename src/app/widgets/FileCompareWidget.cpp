@@ -1,6 +1,7 @@
 #include "FileCompareWidget.h"
 
 #include "app/dialogs/DiffDialog.h"
+#include "app/widgets/DiffView.h"
 #include "app/widgets/LocalFileWidget.h"
 #include "app/widgets/SftpWidget.h"
 #include "core/SessionRepository.h"
@@ -10,22 +11,30 @@
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
+#include <QEvent>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
+#include <QMenu>
 #include <QMessageBox>
+#include <QProgressBar>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStandardItemModel>
-#include <QTableView>
 #include <QTemporaryFile>
+#include <QTimer>
 #include <QToolButton>
+#include <QTreeView>
 #include <QVBoxLayout>
+
+#include <functional>
 
 namespace hssh {
 
@@ -50,6 +59,32 @@ QString statusMarker(FileCompareWidget::CompareStatus status)
         return QStringLiteral("=");
     }
     return QString();
+}
+
+QString actionMarker(FileCompareWidget::SyncAction action)
+{
+    switch (action) {
+    case FileCompareWidget::SyncAction::Upload:
+        return QStringLiteral("→");
+    case FileCompareWidget::SyncAction::Download:
+        return QStringLiteral("←");
+    case FileCompareWidget::SyncAction::Skip:
+        return QStringLiteral("⊘");
+    }
+    return QString();
+}
+
+QColor actionColor(FileCompareWidget::SyncAction action)
+{
+    switch (action) {
+    case FileCompareWidget::SyncAction::Upload:
+        return kOnlyLocalColor;   // green: will be written to the remote
+    case FileCompareWidget::SyncAction::Download:
+        return kOnlyRemoteColor;  // blue: will be written to the local side
+    case FileCompareWidget::SyncAction::Skip:
+        return QColor(0x6a, 0x6a, 0x6a);
+    }
+    return QColor();
 }
 
 QColor statusColor(FileCompareWidget::CompareStatus status)
@@ -116,7 +151,8 @@ FileCompareWidget::FileCompareWidget(const SessionConfig &config, SessionReposit
     connect(uploadButton, &QToolButton::clicked, this, &FileCompareWidget::uploadSelected);
     connect(downloadButton, &QToolButton::clicked, this, &FileCompareWidget::downloadSelected);
     connect(diffButton, &QToolButton::clicked, this, &FileCompareWidget::showDiff);
-    connect(folderCompareButton, &QToolButton::clicked, this, &FileCompareWidget::startFolderCompare);
+    connect(folderCompareButton, &QToolButton::clicked, this,
+            static_cast<void (FileCompareWidget::*)()>(&FileCompareWidget::startFolderCompare));
 
     // Project bar: saved local/remote folder pairs for this session.
     auto *projectBar = new QHBoxLayout;
@@ -161,6 +197,10 @@ FileCompareWidget::FileCompareWidget(const SessionConfig &config, SessionReposit
     auto *filterBar = new QHBoxLayout;
     QToolButton *backButton = makeButton(tr("← Browse"), tr("Back to the directory browser"));
     QToolButton *reCompareButton = makeButton(tr("⟳"), tr("Re-run the folder comparison"));
+    QToolButton *syncUploadButton = makeButton(tr("⇪ Sync to remote"),
+                                               tr("Upload the selected (or all differing) files to the remote folder, overwriting same-name files"));
+    QToolButton *syncDownloadButton = makeButton(tr("⇩ Sync to local"),
+                                                 tr("Download the selected (or all differing) files to the local folder, overwriting same-name files"));
     m_hideSameCheck = new QCheckBox(tr("Hide identical"), treePage);
     m_filterEdit = new QLineEdit(treePage);
     m_filterEdit->setPlaceholderText(tr("Filter by name"));
@@ -168,20 +208,30 @@ FileCompareWidget::FileCompareWidget(const SessionConfig &config, SessionReposit
     m_filterEdit->setMaximumWidth(240);
     filterBar->addWidget(backButton);
     filterBar->addWidget(reCompareButton);
+    filterBar->addWidget(syncUploadButton);
+    filterBar->addWidget(syncDownloadButton);
     filterBar->addWidget(m_hideSameCheck);
     filterBar->addStretch(1);
     filterBar->addWidget(new QLabel(tr("Filter:"), treePage));
     filterBar->addWidget(m_filterEdit);
     treeLayout->addLayout(filterBar);
 
+    // Indeterminate progress while the remote tree walk runs.
+    m_analysisProgress = new QProgressBar(treePage);
+    m_analysisProgress->setRange(0, 0);
+    m_analysisProgress->setMaximumHeight(4);
+    m_analysisProgress->setTextVisible(false);
+    m_analysisProgress->hide();
+    treeLayout->addWidget(m_analysisProgress);
+
     // Path bars: local on the left, remote on the right (mirrored layout).
     auto *pathBar = new QHBoxLayout;
     m_localPathEdit = new QLineEdit(treePage);
     m_localPathEdit->setPlaceholderText(tr("Local folder"));
-    QToolButton *localBrowseButton = makeButton(tr("📁"), tr("Choose a local folder"));
+    QToolButton *localBrowseButton = makeButton(tr("🌁"), tr("Choose a local folder"));
     m_remotePathEdit = new QLineEdit(treePage);
     m_remotePathEdit->setPlaceholderText(tr("Remote folder"));
-    QToolButton *remoteBrowseButton = makeButton(tr("📁"), tr("Pick the remote folder in the browser page"));
+    QToolButton *remoteBrowseButton = makeButton(tr("🌁"), tr("Pick the remote folder in the browser page"));
     pathBar->addWidget(m_localPathEdit, 1);
     pathBar->addWidget(localBrowseButton);
     pathBar->addSpacing(8);
@@ -195,17 +245,18 @@ FileCompareWidget::FileCompareWidget(const SessionConfig &config, SessionReposit
     m_treeModel = new QStandardItemModel(0, 7, this);
     m_treeModel->setHorizontalHeaderLabels({tr("Name"), tr("Size"), tr("Modified"), QStringLiteral("*"),
                                             tr("Modified"), tr("Size"), tr("Name")});
-    m_treeView = new QTableView(treeSplit);
+    m_treeView = new QTreeView(treeSplit);
     m_treeView->setModel(m_treeModel);
     m_treeView->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_treeView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_treeView->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_treeView->setShowGrid(false);
-    m_treeView->verticalHeader()->setVisible(false);
-    m_treeView->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    m_treeView->horizontalHeader()->setSectionResizeMode(6, QHeaderView::Stretch);
+    m_treeView->setUniformRowHeights(true);
+    m_treeView->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_treeView->header()->setSectionResizeMode(6, QHeaderView::Stretch);
     m_treeView->setSortingEnabled(false);
     m_treeView->setAlternatingRowColors(true);
+    m_treeView->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_treeView->setExpandsOnDoubleClick(false); // double-click previews, arrows expand
     treeSplit->addWidget(m_treeView);
 
     m_diffView = new DiffView(treeSplit);
@@ -214,12 +265,20 @@ FileCompareWidget::FileCompareWidget(const SessionConfig &config, SessionReposit
     treeSplit->setStretchFactor(0, 3);
     treeSplit->setStretchFactor(1, 2);
     treeLayout->addWidget(treeSplit, 1);
+
+    auto *hintLabel = new QLabel(
+        tr("Click the arrow column or press Space to change the action (→ upload / ← download / ⊘ skip); "
+           "then use Sync to remote / Sync to local to execute."), treePage);
+    hintLabel->setStyleSheet(QStringLiteral("color: #6a6a6a;"));
+    treeLayout->addWidget(hintLabel);
     m_stack->addWidget(treePage);
 
     layout->addWidget(m_stack, 1);
 
     connect(backButton, &QToolButton::clicked, this, &FileCompareWidget::backToBrowse);
     connect(reCompareButton, &QToolButton::clicked, this, &FileCompareWidget::onTreePathsEdited);
+    connect(syncUploadButton, &QToolButton::clicked, this, [this]() { syncSelection(true); });
+    connect(syncDownloadButton, &QToolButton::clicked, this, [this]() { syncSelection(false); });
     connect(m_localPathEdit, &QLineEdit::returnPressed, this, &FileCompareWidget::onTreePathsEdited);
     connect(m_remotePathEdit, &QLineEdit::returnPressed, this, &FileCompareWidget::onTreePathsEdited);
     connect(localBrowseButton, &QToolButton::clicked, this, [this]() {
@@ -233,7 +292,7 @@ FileCompareWidget::FileCompareWidget(const SessionConfig &config, SessionReposit
     connect(remoteBrowseButton, &QToolButton::clicked, this, &FileCompareWidget::backToBrowse);
     connect(m_filterEdit, &QLineEdit::textChanged, this, &FileCompareWidget::rebuildTreeModel);
     connect(m_hideSameCheck, &QCheckBox::toggled, this, &FileCompareWidget::rebuildTreeModel);
-    connect(m_treeView, &QTableView::doubleClicked, this, &FileCompareWidget::onTreeActivated);
+    connect(m_treeView, &QTreeView::doubleClicked, this, &FileCompareWidget::onTreeActivated);
 
     // Re-compare whenever either side navigates or a transfer lands.
     connect(m_local, &LocalFileWidget::pathChanged, this, &FileCompareWidget::runCompare);
@@ -248,6 +307,10 @@ FileCompareWidget::FileCompareWidget(const SessionConfig &config, SessionReposit
     connect(m_remote, &SftpWidget::transferDone, this, &FileCompareWidget::onDiffDownloadDone);
     // Recursive listing for the folder compare page.
     connect(m_remote, &SftpWidget::dirTreeListed, this, &FileCompareWidget::onDirTreeListed);
+    connect(m_remote, &SftpWidget::dirTreeProgress, this, &FileCompareWidget::onDirTreeProgress);
+    connect(m_treeView, &QTreeView::customContextMenuRequested, this, &FileCompareWidget::onTreeContextMenu);
+    connect(m_treeView, &QTreeView::clicked, this, &FileCompareWidget::cycleRowAction);
+    m_treeView->installEventFilter(this);
 
     // Restore the most recently used project (navigates both panes). The
     // remote navigate queues behind the session's connect, so it lands once
@@ -382,8 +445,7 @@ void FileCompareWidget::downloadSelected()
             const QString localPath = QDir(m_treeLocalRoot).filePath(entry.relPath);
             if (entry.isDir) {
                 // downloadTo is single-file; directories need the recursive API,
-                // which the SFTP pane does not expose for arbitrary targets —
-                // skip them here (use the SFTP tab's Download… for folders).
+                // which the SFTP pane does not expose for arbitrary targets; skip them here
                 continue;
             }
             m_remote->downloadTo(remotePath, localPath);
@@ -479,6 +541,7 @@ void FileCompareWidget::showDiff()
     m_diffTemp->close();
     m_diffRemotePath = remotePath;
     m_diffLocalPath = localPath;
+    m_diffInline = false; // browse page: result opens in a dialog
     m_statusLabel->setText(tr("Downloading %1 for diff…").arg(remoteName));
     m_remote->downloadTo(remotePath, m_diffTemp->fileName());
 }
@@ -589,9 +652,28 @@ void FileCompareWidget::startFolderCompare()
         return;
     }
 
+    startFolderCompare(localDir, remoteDir);
+}
+
+void FileCompareWidget::onTreePathsEdited()
+{
+    const QString localDir = QDir::fromNativeSeparators(m_localPathEdit->text().trimmed());
+    const QString remoteDir = m_remotePathEdit->text().trimmed();
+    if (localDir.isEmpty() || remoteDir.isEmpty()) {
+        m_statusLabel->setText(tr("Enter both a local folder and a remote folder."));
+        return;
+    }
+    startFolderCompare(localDir, remoteDir);
+}
+
+void FileCompareWidget::startFolderCompare(const QString &localDir, const QString &remoteDir)
+{
     m_treeLocalRoot = localDir;
     m_treeRemoteRoot = remoteDir;
     m_rows.clear();
+
+    m_analysisProgress->show();
+    m_statusLabel->setText(tr("Analyzing… scanning local folder"));
 
     // Local side walks instantly; the remote walk arrives via dirTreeListed.
     m_localTreeRows.clear();
@@ -608,8 +690,16 @@ void FileCompareWidget::startFolderCompare()
         m_localTreeRows.insert(row.relPath, row);
     }
 
-    m_statusLabel->setText(tr("Scanning remote directory…"));
+    m_statusLabel->setText(tr("Analyzing… scanning remote folder"));
     m_remote->listDirTree(remoteDir);
+}
+
+void FileCompareWidget::onDirTreeProgress(const QString &path, int entriesScanned)
+{
+    if (path != m_treeRemoteRoot) {
+        return;
+    }
+    m_statusLabel->setText(tr("Analyzing… %1 remote entries scanned").arg(entriesScanned));
 }
 
 void FileCompareWidget::onDirTreeListed(const QString &path, const QList<RemoteFileEntry> &entries)
@@ -636,6 +726,7 @@ void FileCompareWidget::onDirTreeListed(const QString &path, const QList<RemoteF
         if (localIt == remaining.end()) {
             row.status = CompareStatus::OnlyRemote;
             row.localSize = -1;
+            row.action = remote.isDir ? SyncAction::Skip : SyncAction::Download;
             ++onlyRemote;
         } else {
             const CompareRow local = localIt.value();
@@ -655,6 +746,11 @@ void FileCompareWidget::onDirTreeListed(const QString &path, const QList<RemoteF
                 row.status = CompareStatus::Same;
                 ++same;
             }
+            // IDEA-style default: newer side wins; directories never sync.
+            if (row.status == CompareStatus::Different && !row.isDir) {
+                row.action = row.localMtime >= row.remoteMtime ? SyncAction::Upload
+                                                               : SyncAction::Download;
+            }
             remaining.erase(localIt);
         }
         m_rows.append(row);
@@ -662,6 +758,7 @@ void FileCompareWidget::onDirTreeListed(const QString &path, const QList<RemoteF
     for (auto it = remaining.begin(); it != remaining.end(); ++it) {
         CompareRow row = it.value();
         row.status = CompareStatus::OnlyLocal;
+        row.action = row.isDir ? SyncAction::Skip : SyncAction::Upload;
         row.remoteSize = -1;
         m_rows.append(row);
         ++onlyLocal;
@@ -671,6 +768,7 @@ void FileCompareWidget::onDirTreeListed(const QString &path, const QList<RemoteF
         return QString::compare(a.relPath, b.relPath, Qt::CaseInsensitive) < 0;
     });
 
+    m_analysisProgress->hide();
     rebuildTreeModel();
     m_stack->setCurrentIndex(1);
     m_statusLabel->setText(tr("same %1 · different %2 · only local %3 · only remote %4")
@@ -680,11 +778,323 @@ void FileCompareWidget::onDirTreeListed(const QString &path, const QList<RemoteF
                                .arg(onlyRemote));
 }
 
+void FileCompareWidget::onTreeContextMenu(const QPoint &pos)
+{
+    const QModelIndex index = m_treeView->indexAt(pos);
+    if (!index.isValid()) {
+        return;
+    }
+    const int row = compareRowFromIndex(index);
+    if (row < 0 || row >= m_rows.size()) {
+        return;
+    }
+    const CompareRow &entry = m_rows.at(row);
+
+    QMenu menu(this);
+    QAction *uploadAction = menu.addAction(tr("⇪ Upload to remote (overwrite)"));
+    QAction *downloadAction = menu.addAction(tr("⇩ Download to local (overwrite)"));
+    QAction *diffAction = menu.addAction(tr("⇄ Diff"));
+
+    const bool canUpload = !entry.isDir
+        && (entry.status == CompareStatus::OnlyLocal || entry.status == CompareStatus::Different);
+    const bool canDownload = !entry.isDir
+        && (entry.status == CompareStatus::OnlyRemote || entry.status == CompareStatus::Different);
+    uploadAction->setEnabled(canUpload);
+    downloadAction->setEnabled(canDownload);
+    diffAction->setEnabled(!entry.isDir && entry.status == CompareStatus::Different);
+
+    const QAction *chosen = menu.exec(m_treeView->mapToGlobal(pos));
+    if (chosen == uploadAction) {
+        syncSelection(true);
+    } else if (chosen == downloadAction) {
+        syncSelection(false);
+    } else if (chosen == diffAction) {
+        onTreeActivated(index);
+    }
+}
+
+void FileCompareWidget::cycleRowAction(const QModelIndex &index)
+{
+    if (!index.isValid() || index.column() != 3) {
+        return;
+    }
+
+    // Apply to every selected row, IDEA-style (Space/click toggles the plan).
+    QList<int> rows;
+    const QModelIndexList selected = m_treeView->selectionModel()->selectedRows();
+    for (const QModelIndex &sel : selected) {
+        const int r = compareRowFromIndex(sel);
+        if (r >= 0 && !rows.contains(r)) {
+            rows.append(r);
+        }
+    }
+    const int clickedRow = compareRowFromIndex(index);
+    if (clickedRow >= 0 && !rows.contains(clickedRow)) {
+        rows.append(clickedRow);
+    }
+
+    for (int r : rows) {
+        if (r < 0 || r >= m_rows.size()) {
+            continue;
+        }
+        CompareRow &row = m_rows[r];
+        if (row.status == CompareStatus::Same) {
+            continue;
+        }
+
+        if (row.isDir) {
+            // Folder toggle: apply one uniform action to every file inside.
+            const QString prefix = row.relPath + QLatin1Char('/');
+            const SyncAction next = row.action == SyncAction::Upload ? SyncAction::Download
+                                    : row.action == SyncAction::Download ? SyncAction::Skip
+                                                                         : SyncAction::Upload;
+            row.action = next;
+            for (CompareRow &child : m_rows) {
+                if (child.isDir || child.status == CompareStatus::Same
+                    || !child.relPath.startsWith(prefix)) {
+                    continue;
+                }
+                if (next == SyncAction::Upload) {
+                    child.action = child.status == CompareStatus::OnlyRemote ? SyncAction::Skip
+                                                                             : SyncAction::Upload;
+                } else if (next == SyncAction::Download) {
+                    child.action = child.status == CompareStatus::OnlyLocal ? SyncAction::Skip
+                                                                            : SyncAction::Download;
+                } else {
+                    child.action = SyncAction::Skip;
+                }
+            }
+            continue;
+        }
+
+        switch (row.status) {
+        case CompareStatus::OnlyLocal:
+            row.action = row.action == SyncAction::Upload ? SyncAction::Skip : SyncAction::Upload;
+            break;
+        case CompareStatus::OnlyRemote:
+            row.action = row.action == SyncAction::Download ? SyncAction::Skip : SyncAction::Download;
+            break;
+        case CompareStatus::Different:
+            row.action = row.action == SyncAction::Upload ? SyncAction::Download
+                         : row.action == SyncAction::Download ? SyncAction::Skip
+                                                              : SyncAction::Upload;
+            break;
+        case CompareStatus::Same:
+            break;
+        }
+    }
+    rebuildTreeModel();
+}
+
+bool FileCompareWidget::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_treeView && event->type() == QEvent::KeyPress) {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->key() == Qt::Key_Space) {
+            const QModelIndex current = m_treeView->currentIndex();
+            if (current.isValid()) {
+                cycleRowAction(current);
+                return true;
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void FileCompareWidget::syncSelection(bool toRemote)
+{
+    if (m_treeLocalRoot.isEmpty() || m_treeRemoteRoot.isEmpty()) {
+        return;
+    }
+
+    // Selected rows win; empty selection means every differing row.
+    QList<int> candidates;
+    const QModelIndexList selected = m_treeView->selectionModel()->selectedRows();
+    for (const QModelIndex &index : selected) {
+        candidates.append(index.data(Qt::UserRole).toInt());
+    }
+    if (candidates.isEmpty()) {
+        for (int i = 0; i < m_rows.size(); ++i) {
+            candidates.append(i);
+        }
+    }
+
+    // Execute the per-row action plan: only rows whose action matches the
+    // requested direction are transferred.
+    const SyncAction wanted = toRemote ? SyncAction::Upload : SyncAction::Download;
+    QList<int> targets;
+    for (int row : candidates) {
+        if (row < 0 || row >= m_rows.size()) {
+            continue;
+        }
+        const CompareRow &entry = m_rows.at(row);
+        if (entry.isDir || entry.status == CompareStatus::Same) {
+            continue;
+        }
+        if (entry.action == wanted) {
+            targets.append(row);
+        }
+    }
+
+    if (targets.isEmpty()) {
+        m_statusLabel->setText(toRemote
+                                   ? tr("No rows marked → (upload). Click the arrow or press Space to mark rows.")
+                                   : tr("No rows marked ← (download). Click the arrow or press Space to mark rows."));
+        return;
+    }
+
+    const int answer = QMessageBox::question(
+        this, tr("Confirm Sync"),
+        tr("Sync %1 file(s) to the %2? Same-name files will be overwritten.")
+            .arg(targets.size())
+            .arg(toRemote ? tr("remote") : tr("local")),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    startSyncBatch(targets, toRemote);
+}
+
+void FileCompareWidget::startSyncBatch(const QList<int> &targets, bool toRemote)
+{
+    m_syncQueue = targets;
+    m_syncToRemote = toRemote;
+    m_syncTotal = targets.size();
+    m_syncDone = 0;
+
+    if (!m_syncTimer) {
+        m_syncTimer = new QTimer(this);
+        m_syncTimer->setInterval(0);
+        connect(m_syncTimer, &QTimer::timeout, this, &FileCompareWidget::pumpSyncQueue);
+    }
+    m_syncTimer->start();
+    m_statusLabel->setText(tr("Syncing 0/%1…").arg(m_syncTotal));
+}
+
+void FileCompareWidget::pumpSyncQueue()
+{
+    // Small batches per event-loop turn: thousands of queued transfers would
+    // otherwise freeze the GUI (model churn in the transfers panel).
+    constexpr int kBatchSize = 20;
+    int n = 0;
+    while (!m_syncQueue.isEmpty() && n < kBatchSize) {
+        const int row = m_syncQueue.takeFirst();
+        if (row < 0 || row >= m_rows.size()) {
+            continue;
+        }
+        const CompareRow &entry = m_rows.at(row);
+        const QString localAbs = QDir(m_treeLocalRoot).filePath(entry.relPath);
+        const QString remoteAbs = remoteJoin(m_treeRemoteRoot, entry.relPath);
+        if (m_syncToRemote) {
+            const QString parentDir = remoteAbs.left(remoteAbs.lastIndexOf(QLatin1Char('/')));
+            m_remote->ensureRemoteDir(parentDir);
+            m_remote->uploadTo(localAbs, remoteAbs);
+        } else {
+            QDir().mkpath(QFileInfo(localAbs).absolutePath());
+            m_remote->downloadTo(remoteAbs, localAbs);
+        }
+        ++m_syncDone;
+        ++n;
+    }
+
+    m_statusLabel->setText(tr("Syncing %1/%2…").arg(m_syncDone).arg(m_syncTotal));
+
+    if (m_syncQueue.isEmpty()) {
+        m_syncTimer->stop();
+        m_statusLabel->setText(tr("Queued %1 transfer(s); see the Transfers panel.").arg(m_syncTotal));
+        // Re-run the comparison once transfers have had time to land.
+        QTimer::singleShot(2500, this, [this]() {
+            if (!m_treeLocalRoot.isEmpty() && !m_treeRemoteRoot.isEmpty()) {
+                startFolderCompare(m_treeLocalRoot, m_treeRemoteRoot);
+            }
+        });
+    }
+}
+
+// Builds the 7 mirrored columns for one tree node. displayName is the
+// base name only (no directory part); a side missing the file renders blank.
+QList<QStandardItem *> FileCompareWidget::makeTreeRowItems(int rowIndex, const QString &displayName) const
+{
+    const CompareRow &row = m_rows.at(rowIndex);
+    const bool hasLocal = row.localSize >= 0;
+    const bool hasRemote = row.remoteSize >= 0;
+    const QString nameText = (row.isDir ? QStringLiteral("🌁 ") : QString()) + displayName;
+
+    auto *nameItem = new QStandardItem(hasLocal ? nameText : QString());
+    nameItem->setData(rowIndex, Qt::UserRole);
+    auto *localSizeItem = new QStandardItem(row.isDir || !hasLocal ? QString() : sizeText(row.localSize));
+    auto *localMtimeItem = new QStandardItem(hasLocal ? mtimeText(row.localMtime) : QString());
+    auto *markerItem = new QStandardItem(actionMarker(row.action));
+    markerItem->setTextAlignment(Qt::AlignCenter);
+    markerItem->setToolTip(tr("Click or press Space to change the sync action"));
+    auto *remoteMtimeItem = new QStandardItem(hasRemote ? mtimeText(row.remoteMtime) : QString());
+    auto *remoteSizeItem = new QStandardItem(row.isDir || !hasRemote ? QString() : sizeText(row.remoteSize));
+    auto *remoteNameItem = new QStandardItem(hasRemote ? nameText : QString());
+
+    const QColor color = statusColor(row.status);
+    if (color.isValid()) {
+        nameItem->setForeground(color);
+        remoteNameItem->setForeground(color);
+    }
+    const QColor actColor = actionColor(row.action);
+    if (actColor.isValid()) {
+        markerItem->setForeground(actColor);
+    }
+    if (row.action == SyncAction::Skip && row.status != CompareStatus::Same) {
+        QFont font = nameItem->font();
+        font.setStrikeOut(true);
+        nameItem->setFont(font);
+        remoteNameItem->setFont(font);
+    }
+    return {nameItem, localSizeItem, localMtimeItem, markerItem,
+            remoteMtimeItem, remoteSizeItem, remoteNameItem};
+}
+
 void FileCompareWidget::rebuildTreeModel()
 {
     m_treeModel->removeRows(0, m_treeModel->rowCount());
     const QString filter = m_filterEdit->text().trimmed();
     const bool hideSame = m_hideSameCheck->isChecked();
+
+    // Row indexes of every directory, by path (dirs exist as rows in m_rows).
+    QHash<QString, int> dirRowIndex;
+    for (int i = 0; i < m_rows.size(); ++i) {
+        if (m_rows.at(i).isDir) {
+            dirRowIndex.insert(m_rows.at(i).relPath, i);
+        }
+    }
+
+    // Per-parent pending children so we can insert folders before files.
+    QHash<QString, QStandardItem *> folderItems; // dir path -> name item (col 0)
+
+    std::function<QStandardItem *(const QString &)> ensureFolder;
+    ensureFolder = [&](const QString &dirPath) -> QStandardItem * {
+        if (auto it = folderItems.constFind(dirPath); it != folderItems.constEnd()) {
+            return it.value();
+        }
+        // Recursively ensure the parent folder, then create this one.
+        const int slash = dirPath.lastIndexOf(QLatin1Char('/'));
+        QStandardItem *parent = slash < 0 ? m_treeModel->invisibleRootItem()
+                                          : ensureFolder(dirPath.left(slash));
+        const QString baseName = slash < 0 ? dirPath : dirPath.mid(slash + 1);
+        const int dirRow = dirRowIndex.value(dirPath, -1);
+        QList<QStandardItem *> items;
+        if (dirRow >= 0) {
+            items = makeTreeRowItems(dirRow, baseName);
+        } else {
+            // Folder not present as a row (e.g. filtered out on one side):
+            // still show it as a container.
+            auto *nameItem = new QStandardItem(QStringLiteral("🌁 ") + baseName);
+            nameItem->setData(-1, Qt::UserRole);
+            items = QList<QStandardItem *>{nameItem, new QStandardItem(), new QStandardItem(),
+                                           new QStandardItem(), new QStandardItem(),
+                                           new QStandardItem(), new QStandardItem()};
+        }
+        parent->appendRow(items);
+        folderItems.insert(dirPath, items.first());
+        return items.first();
+    };
 
     for (int i = 0; i < m_rows.size(); ++i) {
         const CompareRow &row = m_rows.at(i);
@@ -695,48 +1105,60 @@ void FileCompareWidget::rebuildTreeModel()
             continue;
         }
 
-        auto *nameItem = new QStandardItem((row.isDir ? QStringLiteral("📁 ") : QString()) + row.relPath);
-        nameItem->setData(i, Qt::UserRole);
-        auto *statusItem = new QStandardItem(statusMarker(row.status));
-        statusItem->setTextAlignment(Qt::AlignCenter);
-        auto *localSizeItem = new QStandardItem(row.isDir ? QString() : sizeText(row.localSize));
-        auto *remoteSizeItem = new QStandardItem(row.isDir ? QString() : sizeText(row.remoteSize));
-        auto *localMtimeItem = new QStandardItem(mtimeText(row.localMtime));
-        auto *remoteMtimeItem = new QStandardItem(mtimeText(row.remoteMtime));
-        if (row.localSize < 0) { // absent on this side
-            localSizeItem->setText(QString());
-            localMtimeItem->setText(QString());
-        }
-        if (row.remoteSize < 0) {
-            remoteSizeItem->setText(QString());
-            remoteMtimeItem->setText(QString());
-        }
+        const int slash = row.relPath.lastIndexOf(QLatin1Char('/'));
+        const QString dirPath = slash < 0 ? QString() : row.relPath.left(slash);
+        const QString baseName = slash < 0 ? row.relPath : row.relPath.mid(slash + 1);
 
-        const QColor color = statusColor(row.status);
-        if (color.isValid()) {
-            nameItem->setForeground(color);
-            statusItem->setForeground(color);
+        QStandardItem *parent = dirPath.isEmpty()
+                                    ? m_treeModel->invisibleRootItem()
+                                    : ensureFolder(dirPath);
+        if (row.isDir) {
+            // Directory rows are created by ensureFolder(); nothing to add.
+            continue;
         }
-        m_treeModel->appendRow({nameItem, statusItem, localSizeItem, remoteSizeItem,
-                                localMtimeItem, remoteMtimeItem});
+        parent->appendRow(makeTreeRowItems(i, baseName));
     }
+}
+
+int FileCompareWidget::compareRowFromIndex(const QModelIndex &index) const
+{
+    if (!index.isValid()) {
+        return -1;
+    }
+    return index.siblingAtColumn(0).data(Qt::UserRole).toInt();
 }
 
 void FileCompareWidget::onTreeActivated(const QModelIndex &index)
 {
-    if (!index.isValid()) {
-        return;
-    }
-    const int row = index.data(Qt::UserRole).toInt();
+    const int row = compareRowFromIndex(index);
     if (row < 0 || row >= m_rows.size()) {
         return;
     }
     const CompareRow &entry = m_rows.at(row);
-    // Diffing needs the file on both sides.
-    if (entry.isDir || entry.status == CompareStatus::OnlyLocal
-        || entry.status == CompareStatus::OnlyRemote) {
+    if (entry.isDir) {
         return;
     }
+
+    // One-sided local file: no download needed, preview the local content.
+    if (entry.status == CompareStatus::OnlyLocal) {
+        if (entry.localSize > kMaxDiffFileSize) {
+            QMessageBox::information(this, tr("Diff"),
+                                     tr("Files larger than 2 MB are not supported by the diff viewer."));
+            return;
+        }
+        const QString localPath = QDir(m_treeLocalRoot).filePath(entry.relPath);
+        QFile file(localPath);
+        if (!file.open(QIODevice::ReadOnly)) {
+            m_statusLabel->setText(tr("Failed to read %1").arg(entry.relPath));
+            return;
+        }
+        m_diffView->setContent(tr("Local: %1").arg(QDir::toNativeSeparators(localPath)),
+                               QString::fromUtf8(file.readAll()),
+                               QString(), QString()); // absent remote side stays blank
+        m_statusLabel->setText(tr("Preview ready."));
+        return;
+    }
+
     if (entry.localSize > kMaxDiffFileSize || entry.remoteSize > kMaxDiffFileSize) {
         QMessageBox::information(this, tr("Diff"),
                                  tr("Files larger than 2 MB are not supported by the diff viewer."));
@@ -757,6 +1179,8 @@ void FileCompareWidget::onTreeActivated(const QModelIndex &index)
     m_diffTemp->close();
     m_diffRemotePath = remoteJoin(m_treeRemoteRoot, entry.relPath);
     m_diffLocalPath = QDir(m_treeLocalRoot).filePath(entry.relPath);
+    m_diffInline = true; // tree page: result goes to the inline preview pane
+    m_diffRemoteOnly = (entry.status == CompareStatus::OnlyRemote);
     m_statusLabel->setText(tr("Downloading %1 for diff…").arg(entry.relPath));
     m_remote->downloadTo(m_diffRemotePath, m_diffTemp->fileName());
 }
@@ -798,7 +1222,8 @@ void FileCompareWidget::onDiffDownloadDone(const QString &remotePath, bool ok)
     };
     QString localText;
     QString remoteText;
-    const bool localOk = readText(localPath, &localText);
+    // One-sided rows: the absent side has no file to read.
+    const bool localOk = m_diffRemoteOnly ? true : readText(localPath, &localText);
     const bool remoteOk = readText(tempPath, &remoteText);
     QFile::remove(tempPath);
     if (!localOk || !remoteOk) {
@@ -806,10 +1231,24 @@ void FileCompareWidget::onDiffDownloadDone(const QString &remotePath, bool ok)
         return;
     }
 
-    auto *dialog = new DiffDialog(tr("Local: %1").arg(QDir::toNativeSeparators(localPath)), localText,
-                                  tr("Remote: %1").arg(remotePath), remoteText,
-                                  this);
-    dialog->show();
+    // Tree page diffs render in the inline preview pane; browse-page diffs
+    // (no pane there) open in a dialog.
+    if (m_diffInline && m_diffView) {
+        if (m_diffRemoteOnly) {
+            // Absent local side stays blank (title and content), IDEA-style.
+            m_diffView->setContent(QString(), QString(),
+                                   tr("Remote: %1").arg(remotePath), remoteText);
+        } else {
+            m_diffView->setContent(tr("Local: %1").arg(QDir::toNativeSeparators(localPath)), localText,
+                                   tr("Remote: %1").arg(remotePath), remoteText);
+        }
+    } else {
+        auto *dialog = new DiffDialog(tr("Local: %1").arg(QDir::toNativeSeparators(localPath)), localText,
+                                      tr("Remote: %1").arg(remotePath), remoteText,
+                                      this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
+    }
     m_statusLabel->setText(tr("Diff ready."));
 }
 

@@ -1,11 +1,13 @@
 #include "SshSession.h"
 
+#include "core/PortForward.h"
 #include "core/SshConnect.h"
 #include "utils/Crypto.h"
 
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QMutex>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
@@ -22,13 +24,17 @@ namespace {
 
 #ifdef HSSH_HAS_LIBSSH
 
+// Polls the shell channel for output. Every libssh call is guarded by the
+// session mutex so it can run concurrently with keep-alive probes and port
+// forwarding activity on the same session.
 class SshShellReader : public QObject {
     Q_OBJECT
 
 public:
-    explicit SshShellReader(ssh_channel channel, QObject *parent = nullptr)
+    SshShellReader(ssh_channel channel, QMutex *sessionMutex, QObject *parent = nullptr)
         : QObject(parent)
         , m_channel(channel)
+        , m_mutex(sessionMutex)
     {
     }
 
@@ -50,9 +56,11 @@ public slots:
 private slots:
     void poll()
     {
-        if (!m_channel)
+        if (!m_channel || !m_mutex) {
             return;
+        }
 
+        QMutexLocker locker(m_mutex);
         char buffer[4096];
         int n = ssh_channel_read_nonblocking(m_channel, buffer, sizeof(buffer), 0);
         if (n > 0) {
@@ -62,6 +70,13 @@ private slots:
         n = ssh_channel_read_nonblocking(m_channel, buffer, sizeof(buffer), 1);
         if (n > 0) {
             emit dataReceived(QByteArray(buffer, n));
+        }
+
+        if (n < 0) {
+            // Transport error: treat as a dropped connection, not a shell exit.
+            emit readError();
+            stop();
+            return;
         }
 
         if (ssh_channel_is_eof(m_channel)) {
@@ -74,9 +89,74 @@ private slots:
 signals:
     void dataReceived(const QByteArray &data);
     void finished(int exitCode);
+    void readError();
 
 private:
     ssh_channel m_channel = nullptr;
+    QMutex *m_mutex = nullptr;
+    QTimer *m_timer = nullptr;
+};
+
+// Periodically writes an SSH_MSG_IGNORE message to keep NATs/firewalls from
+// dropping the connection and to detect a dead transport. Runs on its own
+// thread: ssh_send_ignore may block until the socket write timeout.
+class SshKeepAliveProbe : public QObject {
+    Q_OBJECT
+
+public:
+    SshKeepAliveProbe(QMutex *sessionMutex, int intervalMs, QObject *parent = nullptr)
+        : QObject(parent)
+        , m_mutex(sessionMutex)
+        , m_intervalMs(intervalMs)
+    {
+    }
+
+    void setSession(ssh_session session)
+    {
+        m_session = session;
+    }
+
+public slots:
+    void start()
+    {
+        m_timer = new QTimer(this);
+        connect(m_timer, &QTimer::timeout, this, &SshKeepAliveProbe::probe);
+        m_timer->start(m_intervalMs);
+    }
+
+    void stop()
+    {
+        if (m_timer) {
+            m_timer->stop();
+        }
+        m_stopped = true;
+    }
+
+signals:
+    void probeFailed();
+
+private slots:
+    void probe()
+    {
+        if (m_stopped || !m_session || !m_mutex) {
+            return;
+        }
+        QMutexLocker locker(m_mutex);
+        if (!ssh_is_connected(m_session)) {
+            emit probeFailed();
+            return;
+        }
+        const int rc = ssh_send_ignore(m_session, "hssh keepalive");
+        if (rc != SSH_OK) {
+            emit probeFailed();
+        }
+    }
+
+private:
+    ssh_session m_session = nullptr;
+    QMutex *m_mutex = nullptr;
+    int m_intervalMs = 30000;
+    bool m_stopped = false;
     QTimer *m_timer = nullptr;
 };
 
@@ -86,6 +166,9 @@ public:
     ssh_channel shellChannel = nullptr;
     SshShellReader *reader = nullptr;
     QThread readerThread;
+    SshKeepAliveProbe *probe = nullptr;
+    QThread probeThread;
+    QMutex sessionMutex;
     SshSession::State state = SshSession::State::Disconnected;
     QString errorString;
     SessionConfig config;
@@ -97,6 +180,15 @@ public:
 
     void cleanup()
     {
+        // Stop the workers before releasing libssh resources: the reader
+        // thread may be inside a read and the probe inside ssh_send_ignore.
+        if (probe) {
+            probe->stop();
+            probeThread.quit();
+            probeThread.wait();
+            probe->deleteLater();
+            probe = nullptr;
+        }
         if (reader) {
             reader->stop();
             readerThread.quit();
@@ -105,11 +197,13 @@ public:
             reader = nullptr;
         }
         if (shellChannel) {
+            QMutexLocker locker(&sessionMutex);
             ssh_channel_close(shellChannel);
             ssh_channel_free(shellChannel);
             shellChannel = nullptr;
         }
         if (session) {
+            QMutexLocker locker(&sessionMutex);
             ssh_disconnect(session);
             ssh_free(session);
             session = nullptr;
@@ -296,6 +390,9 @@ public:
     std::unique_ptr<LibSshImpl> ssh;
     QThread *connectThread = nullptr;
     SshConnectWorker *connectWorker = nullptr;
+    int reconnectAttempts = 0;
+    QTimer *reconnectTimer = nullptr;
+    bool userDisconnect = false;
 #else
     std::unique_ptr<QProcessImpl> process;
 #endif
@@ -304,6 +401,7 @@ public:
 SshSession::SshSession(QObject *parent)
     : QObject(parent)
     , d(std::make_unique<Impl>())
+    , m_portForwards(new PortForwardManager(this, this))
 {
 #ifdef HSSH_HAS_LIBSSH
     d->ssh = std::make_unique<LibSshImpl>();
@@ -324,6 +422,7 @@ SshSession::SshSession(QObject *parent)
 SshSession::~SshSession()
 {
 #ifdef HSSH_HAS_LIBSSH
+    clearReconnectTimer();
     if (d->connectThread) {
         // The worker may still be blocked in ssh_connect; stop result
         // delivery to this dying object and let the thread finish (and
@@ -407,6 +506,9 @@ void SshSession::connectToHost()
 void SshSession::disconnect()
 {
 #ifdef HSSH_HAS_LIBSSH
+    d->userDisconnect = true;
+    clearReconnectTimer();
+    m_portForwards->clear();
     if (d->ssh) {
         d->ssh->cleanup();
         d->ssh->setState(State::Disconnected);
@@ -458,8 +560,25 @@ void SshSession::setShellSize(int columns, int rows)
 
 #ifdef HSSH_HAS_LIBSSH
 
+ssh_session SshSession::sessionHandle() const
+{
+    return d->ssh ? d->ssh->session : nullptr;
+}
+
+QMutex *SshSession::sessionMutex() const
+{
+    return d->ssh ? &d->ssh->sessionMutex : nullptr;
+}
+
+PortForwardManager *SshSession::portForwardManager() const
+{
+    return m_portForwards;
+}
+
 void SshSession::connectToHostLibSsh()
 {
+    d->userDisconnect = false;
+    clearReconnectTimer();
     d->ssh->cleanup();
 
     d->state = State::Connecting;
@@ -520,27 +639,34 @@ void SshSession::onConnectWorkerDone(int rc, const QString &message)
 
 void SshSession::openShellChannelLibSsh()
 {
+    const auto failAndCleanup = [this](const QString &message) {
+        setError(message);
+        d->ssh->cleanup();
+        d->state = State::Disconnected;
+        emit stateChanged(State::Disconnected);
+    };
+
     d->ssh->shellChannel = ssh_channel_new(d->ssh->session);
     if (!d->ssh->shellChannel) {
-        setError(tr("Failed to create SSH channel"));
+        failAndCleanup(tr("Failed to create SSH channel"));
         return;
     }
 
     int rc = ssh_channel_open_session(d->ssh->shellChannel);
     if (rc != SSH_OK) {
-        setError(QString::fromUtf8(ssh_get_error(d->ssh->session)));
+        failAndCleanup(QString::fromUtf8(ssh_get_error(d->ssh->session)));
         return;
     }
 
     rc = ssh_channel_request_pty_size(d->ssh->shellChannel, "xterm-256color", 80, 24);
     if (rc != SSH_OK) {
-        setError(QString::fromUtf8(ssh_get_error(d->ssh->session)));
+        failAndCleanup(QString::fromUtf8(ssh_get_error(d->ssh->session)));
         return;
     }
 
     rc = ssh_channel_request_shell(d->ssh->shellChannel);
     if (rc != SSH_OK) {
-        setError(QString::fromUtf8(ssh_get_error(d->ssh->session)));
+        failAndCleanup(QString::fromUtf8(ssh_get_error(d->ssh->session)));
         return;
     }
 
@@ -549,7 +675,10 @@ void SshSession::openShellChannelLibSsh()
     emit stateChanged(State::Connected);
     emit connected();
 
-    d->ssh->reader = new SshShellReader(d->ssh->shellChannel);
+    d->reconnectAttempts = 0;
+    startKeepAliveLibSsh();
+
+    d->ssh->reader = new SshShellReader(d->ssh->shellChannel, &d->ssh->sessionMutex);
     d->ssh->reader->moveToThread(&d->ssh->readerThread);
     connect(d->ssh->reader, &SshShellReader::dataReceived, this, [this](const QByteArray &data) {
         emit dataReceived(data);
@@ -557,16 +686,106 @@ void SshSession::openShellChannelLibSsh()
     connect(d->ssh->reader, &SshShellReader::finished, this, [this](int exitCode) {
         emit execFinished(exitCode);
     });
+    connect(d->ssh->reader, &SshShellReader::readError, this, &SshSession::onShellReaderFailed);
     connect(&d->ssh->readerThread, &QThread::started, d->ssh->reader, &SshShellReader::start);
     d->ssh->readerThread.start();
 }
 
-void SshSession::execLibSsh(const QString &command)
+void SshSession::startKeepAliveLibSsh()
+{
+    const int intervalSeconds = d->config.keepAliveSeconds();
+    if (intervalSeconds <= 0) {
+        return;
+    }
+
+    d->ssh->probe = new SshKeepAliveProbe(&d->ssh->sessionMutex, intervalSeconds * 1000);
+    d->ssh->probe->setSession(d->ssh->session);
+    d->ssh->probe->moveToThread(&d->ssh->probeThread);
+    connect(d->ssh->probe, &SshKeepAliveProbe::probeFailed, this, &SshSession::onKeepAliveFailed);
+    connect(&d->ssh->probeThread, &QThread::started, d->ssh->probe, &SshKeepAliveProbe::start);
+    d->ssh->probeThread.start();
+}
+
+void SshSession::stopKeepAliveLibSsh()
+{
+    if (d->ssh->probe) {
+        d->ssh->probe->stop();
+        d->ssh->probeThread.quit();
+        d->ssh->probeThread.wait();
+        d->ssh->probe->deleteLater();
+        d->ssh->probe = nullptr;
+    }
+}
+
+void SshSession::onKeepAliveFailed()
+{
+    onConnectionLost();
+}
+
+void SshSession::onShellReaderFailed()
+{
+    onConnectionLost();
+}
+
+void SshSession::onConnectionLost()
 {
     if (d->state != State::Connected) {
+        return;
+    }
+
+    qWarning() << "SSH connection lost:" << d->config.displayName();
+    stopKeepAliveLibSsh();
+    m_portForwards->clear();
+    d->ssh->cleanup();
+    d->state = State::Disconnected;
+    emit stateChanged(State::Disconnected);
+    emit connectionLost();
+
+    if (d->config.autoReconnect() && !d->userDisconnect) {
+        scheduleReconnect();
+    }
+}
+
+void SshSession::scheduleReconnect()
+{
+    constexpr int kMaxAttempts = 3;
+    if (d->reconnectAttempts >= kMaxAttempts) {
+        setError(tr("Connection lost; reconnect attempts exhausted"));
+        return;
+    }
+
+    ++d->reconnectAttempts;
+    qWarning() << "Scheduling SSH reconnect, attempt" << d->reconnectAttempts;
+    clearReconnectTimer();
+    d->reconnectTimer = new QTimer(this);
+    d->reconnectTimer->setSingleShot(true);
+    d->reconnectTimer->setInterval(3000);
+    connect(d->reconnectTimer, &QTimer::timeout, this, [this]() {
+        d->reconnectTimer = nullptr;
+        connectToHost();
+    });
+    d->reconnectTimer->start();
+}
+
+void SshSession::clearReconnectTimer()
+{
+    if (d->reconnectTimer) {
+        d->reconnectTimer->stop();
+        d->reconnectTimer->deleteLater();
+        d->reconnectTimer = nullptr;
+    }
+}
+
+void SshSession::execLibSsh(const QString &command)
+{
+    if (d->state != State::Connected || !d->ssh->session) {
         setError(tr("Not connected"));
         return;
     }
+
+    // The whole command runs under the session mutex: the reader thread and
+    // keep-alive probe must not touch the session while the channel is open.
+    QMutexLocker locker(&d->ssh->sessionMutex);
 
     ssh_channel channel = ssh_channel_new(d->ssh->session);
     if (!channel) {
@@ -616,6 +835,7 @@ void SshSession::writeShellLibSsh(const QByteArray &data)
     if (d->state != State::Connected || !d->ssh->shellChannel) {
         return;
     }
+    QMutexLocker locker(&d->ssh->sessionMutex);
     ssh_channel_write(d->ssh->shellChannel, data.constData(), static_cast<uint32_t>(data.size()));
 }
 
@@ -624,6 +844,7 @@ void SshSession::setShellSizeLibSsh(int columns, int rows)
     if (d->state != State::Connected || !d->ssh->shellChannel) {
         return;
     }
+    QMutexLocker locker(&d->ssh->sessionMutex);
     ssh_channel_change_pty_size(d->ssh->shellChannel, columns, rows);
 }
 

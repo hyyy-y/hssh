@@ -65,6 +65,15 @@ public:
     [[nodiscard]] QStringList postLoginCommands() const;
     void setPostLoginCommands(const QStringList &commands);
 
+    // Connection robustness.
+    // Keep-alive interval in seconds; 0 disables keep-alive probes.
+    [[nodiscard]] int keepAliveSeconds() const;
+    void setKeepAliveSeconds(int seconds);
+    // Reconnect automatically when the connection is lost (up to a fixed
+    // number of attempts).
+    [[nodiscard]] bool autoReconnect() const;
+    void setAutoReconnect(bool enabled);
+
     [[nodiscard]] bool isValid() const;
     [[nodiscard]] QString displayName() const;
 
@@ -85,6 +94,8 @@ private:
     QString m_privateKeyPath;
     SecureString m_keyPassphrase;
     QStringList m_postLoginCommands;
+    int m_keepAliveSeconds = 30;
+    bool m_autoReconnect = false;
 };
 
 } // namespace hssh

@@ -1,5 +1,6 @@
 #include "NewSessionDialog.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -33,6 +34,8 @@ void NewSessionDialog::setSessionConfig(const SessionConfig &config)
     m_passwordEdit->setText(config.password().toString());
     m_keyPathEdit->setText(config.privateKeyPath());
     m_keyPassphraseEdit->setText(config.keyPassphrase().toString());
+    m_keepAliveSpin->setValue(config.keepAliveSeconds());
+    m_autoReconnectCheck->setChecked(config.autoReconnect());
 }
 
 SessionConfig NewSessionDialog::sessionConfig() const
@@ -84,6 +87,21 @@ void NewSessionDialog::setupUi()
 
     layout->addLayout(formLayout);
 
+    auto *connectionGroup = new QGroupBox(tr("Connection"), this);
+    auto *connectionLayout = new QFormLayout(connectionGroup);
+
+    m_keepAliveSpin = new QSpinBox(connectionGroup);
+    m_keepAliveSpin->setRange(0, 86400);
+    m_keepAliveSpin->setValue(30);
+    m_keepAliveSpin->setSuffix(tr(" s"));
+    m_keepAliveSpin->setSpecialValueText(tr("Disabled"));
+    connectionLayout->addRow(tr("Keep-alive interval:"), m_keepAliveSpin);
+
+    m_autoReconnectCheck = new QCheckBox(tr("Reconnect automatically after a connection drop"), connectionGroup);
+    connectionLayout->addRow(QString(), m_autoReconnectCheck);
+
+    layout->addWidget(connectionGroup);
+
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     connect(buttons, &QDialogButtonBox::accepted, this, &NewSessionDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &NewSessionDialog::reject);
@@ -105,6 +123,8 @@ void NewSessionDialog::accept()
     m_config.setPassword(SecureString(m_passwordEdit->text()));
     m_config.setPrivateKeyPath(m_keyPathEdit->text().trimmed());
     m_config.setKeyPassphrase(SecureString(m_keyPassphraseEdit->text()));
+    m_config.setKeepAliveSeconds(m_keepAliveSpin->value());
+    m_config.setAutoReconnect(m_autoReconnectCheck->isChecked());
 
     QDialog::accept();
 }

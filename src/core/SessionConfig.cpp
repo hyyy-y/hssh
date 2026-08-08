@@ -137,6 +137,26 @@ void SessionConfig::setPostLoginCommands(const QStringList &commands)
     m_postLoginCommands = commands;
 }
 
+int SessionConfig::keepAliveSeconds() const
+{
+    return m_keepAliveSeconds;
+}
+
+void SessionConfig::setKeepAliveSeconds(int seconds)
+{
+    m_keepAliveSeconds = qBound(0, seconds, 86400);
+}
+
+bool SessionConfig::autoReconnect() const
+{
+    return m_autoReconnect;
+}
+
+void SessionConfig::setAutoReconnect(bool enabled)
+{
+    m_autoReconnect = enabled;
+}
+
 bool SessionConfig::isValid() const
 {
     if (m_sessionType == SessionType::Local) {
@@ -178,6 +198,8 @@ QVariantMap SessionConfig::toMap() const
     map[QStringLiteral("privateKeyPath")] = m_privateKeyPath;
     map[QStringLiteral("keyPassphrase")] = QString::fromUtf8(m_keyPassphrase.toByteArray().toBase64());
     map[QStringLiteral("postLoginCommands")] = m_postLoginCommands;
+    map[QStringLiteral("keepAliveSeconds")] = m_keepAliveSeconds;
+    map[QStringLiteral("autoReconnect")] = m_autoReconnect;
     return map;
 }
 
@@ -202,6 +224,8 @@ SessionConfig SessionConfig::fromMap(const QVariantMap &map)
     config.setKeyPassphrase(SecureString(passphraseBytes));
 
     config.setPostLoginCommands(map.value(QStringLiteral("postLoginCommands")).toStringList());
+    config.setKeepAliveSeconds(map.value(QStringLiteral("keepAliveSeconds"), 30).toInt());
+    config.setAutoReconnect(map.value(QStringLiteral("autoReconnect")).toBool());
     return config;
 }
 

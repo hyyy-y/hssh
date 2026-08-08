@@ -24,6 +24,14 @@ public:
     void close() override;
     [[nodiscard]] bool isRunning() const override;
 
+    // The backing SSH session (null until start() and after close()).
+    [[nodiscard]] SshSession *session() const { return m_session; }
+
+signals:
+    // The transport dropped (keep-alive failure or read error).
+    // autoReconnect indicates the session is already reconnecting itself.
+    void linkDown(bool autoReconnect);
+
 private:
     SessionConfig m_config;
     SshSession *m_session = nullptr;

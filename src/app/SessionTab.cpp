@@ -1,6 +1,7 @@
 #include "SessionTab.h"
 
 #include "core/SessionConfig.h"
+#include "core/SshSession.h"
 #include "terminal/LocalShellProcess.h"
 #include "terminal/SshShellProcess.h"
 #include "terminal/TerminalSession.h"
@@ -31,6 +32,25 @@ SessionTab *SessionTab::createLocal(const QString &shellType, QWidget *parent)
 SessionConfig SessionTab::config() const
 {
     return m_config;
+}
+
+SshSession *SessionTab::sshSession() const
+{
+    if (!m_terminalSession) {
+        return nullptr;
+    }
+    auto *sshProcess = qobject_cast<SshShellProcess *>(m_terminalSession->process());
+    return sshProcess ? sshProcess->session() : nullptr;
+}
+
+QString SessionTab::readTerminalText(int maxLines) const
+{
+    return m_terminalSession ? m_terminalSession->bufferText(maxLines) : QString();
+}
+
+QString SessionTab::readTerminalTextRange(int fromLine, int maxLines) const
+{
+    return m_terminalSession ? m_terminalSession->bufferTextRange(fromLine, maxLines) : QString();
 }
 
 void SessionTab::setupUi()
@@ -72,7 +92,9 @@ void SessionTab::disconnectSession()
 void SessionTab::runCommand(const QString &command)
 {
     if (m_terminalSession) {
-        m_terminalSession->process()->write(command.toUtf8());
+        // Route through TerminalSession so the link-dead guard and
+        // Enter-to-reconnect apply to API-sent input too.
+        m_terminalSession->sendInput(command.toUtf8());
     }
 }
 

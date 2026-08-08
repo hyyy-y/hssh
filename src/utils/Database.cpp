@@ -100,7 +100,51 @@ bool Database::runMigrations()
         return false;
     }
 
-    return createSchema();
+    if (!createSchema()) {
+        return false;
+    }
+
+    return migrateSchema();
+}
+
+// Adds columns that older databases lack. New databases get them from
+// createSchema(); existing ones need ALTER TABLE.
+bool Database::migrateSchema()
+{
+    const QList<QStringList> migrations = {
+        {QStringLiteral("sessions"), QStringLiteral("keep_alive_seconds"),
+         QStringLiteral("ALTER TABLE sessions ADD COLUMN keep_alive_seconds INTEGER DEFAULT 30")},
+        {QStringLiteral("sessions"), QStringLiteral("auto_reconnect"),
+         QStringLiteral("ALTER TABLE sessions ADD COLUMN auto_reconnect INTEGER DEFAULT 0")},
+    };
+
+    for (const QStringList &migration : migrations) {
+        QSqlQuery query(db());
+        query.prepare(QStringLiteral("PRAGMA table_info(%1)").arg(migration.at(0)));
+        if (!query.exec()) {
+            m_lastError = query.lastError().text();
+            return false;
+        }
+
+        bool hasColumn = false;
+        while (query.next()) {
+            if (query.value(1).toString() == migration.at(1)) {
+                hasColumn = true;
+                break;
+            }
+        }
+
+        if (hasColumn) {
+            continue;
+        }
+
+        if (!query.exec(migration.at(2))) {
+            m_lastError = query.lastError().text();
+            return false;
+        }
+    }
+
+    return true;
 }
 
 bool Database::createSchema()
@@ -131,6 +175,8 @@ bool Database::createSchema()
             "    private_key_path TEXT,"
             "    key_passphrase_encrypted BLOB,"
             "    post_login_commands TEXT,"
+            "    keep_alive_seconds INTEGER DEFAULT 30,"
+            "    auto_reconnect INTEGER DEFAULT 0,"
             "    sort_index INTEGER DEFAULT 0,"
             "    FOREIGN KEY(folder_id) REFERENCES folders(id)"
             ")"))) {
@@ -160,6 +206,16 @@ bool Database::createSchema()
             "    remote_path TEXT NOT NULL,"
             "    last_used INTEGER DEFAULT 0,"
             "    UNIQUE(session_id, name)"
+            ")"))) {
+        m_lastError = query.lastError().text();
+        return false;
+    }
+
+    // Most-recently-used sessions (File > Recent Sessions).
+    if (!query.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS session_history ("
+            "    session_id TEXT PRIMARY KEY,"
+            "    last_used INTEGER NOT NULL"
             ")"))) {
         m_lastError = query.lastError().text();
         return false;

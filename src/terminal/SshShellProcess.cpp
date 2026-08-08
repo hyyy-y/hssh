@@ -5,6 +5,7 @@
 
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QTimer>
 
 namespace hssh {
 
@@ -35,9 +36,29 @@ bool SshShellProcess::start()
     connect(m_session, &SshSession::errorOccurred, this, [this](const QString &message) {
         emit errorOccurred(message);
     });
+    connect(m_session, &SshSession::connectionLost, this, [this]() {
+        emit linkDown(m_config.autoReconnect());
+    });
     connect(m_session, &SshSession::execFinished, this, [this](int exitCode) {
         emit finished(exitCode);
     });
+
+    // Run the session's post-login commands once the shell channel is up.
+    // A short delay lets the shell print its banner/prompt first so the
+    // commands land in a usable prompt instead of being swallowed.
+    const QStringList postLoginCommands = m_config.postLoginCommands();
+    if (!postLoginCommands.isEmpty()) {
+        connect(m_session, &SshSession::connected, this, [this, postLoginCommands]() {
+            QTimer::singleShot(150, this, [this, postLoginCommands]() {
+                if (!m_session) {
+                    return;
+                }
+                for (const QString &command : postLoginCommands) {
+                    m_session->writeShell(command.toUtf8() + "\n");
+                }
+            });
+        });
+    }
 
     // Connect signals first so that the initial banner/prompt data emitted by
     // the shell reader thread is not lost before SshShellProcess is wired up.

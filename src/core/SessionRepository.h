@@ -15,7 +15,10 @@ class SessionRepository : public QObject {
     Q_OBJECT
 
 public:
-    explicit SessionRepository(QObject *parent = nullptr);
+    // connectionName: distinct SQLite connection name so that a second
+    // repository (e.g. the agent's) does not steal the default connection.
+    explicit SessionRepository(QObject *parent = nullptr,
+                               const QString &connectionName = QStringLiteral("hssh_default"));
     ~SessionRepository() override;
 
     bool initialize();
@@ -35,6 +38,18 @@ public:
     [[nodiscard]] SessionConfig loadSession(const QString &id) const;
     [[nodiscard]] QList<SessionConfig> loadAllSessions() const;
 
+    // Decrypts every stored secret with the current key and re-encrypts
+    // them with the (possibly new) active key. Used when enabling/disabling
+    // or changing the master password. The repository must be unlocked.
+    bool reEncryptAllSecrets();
+
+    // Connection history (File > Recent Sessions).
+    // Marks a session as recently used; returns false on db error.
+    bool recordSessionUse(const QString &sessionId);
+    // Most recently used sessions (still existing in the database), newest
+    // first.
+    [[nodiscard]] QList<SessionConfig> recentSessions(int limit = 10) const;
+
     // Convenience: load the whole tree
     struct TreeData {
         QList<SessionConfig> sessions;
@@ -42,6 +57,11 @@ public:
         QMap<QString, QString> folderNames; // id -> name
     };
     [[nodiscard]] TreeData loadTree() const;
+
+    // Session import/export (JSON, includes folders). Import skips items
+    // whose id already exists, so a file can be imported repeatedly.
+    bool exportSessionsToJson(const QString &filePath) const;
+    bool importSessionsFromJson(const QString &filePath);
 
     // Compare projects: saved local/remote folder pairs for the compare tab,
     // rooted at the remote machine (session id).
@@ -65,6 +85,9 @@ signals:
     void sessionsChanged();
 
 private:
+    // Re-encrypts legacy plaintext secrets with the active key.
+    void migrateSecrets();
+
     class Impl;
     std::unique_ptr<Impl> d;
 };

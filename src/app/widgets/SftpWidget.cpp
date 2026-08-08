@@ -101,6 +101,7 @@ SftpWidget::SftpWidget(const SessionConfig &config, QWidget *parent)
     connect(m_sftp, &SftpSession::transferStep, this, &SftpWidget::onTransferStep);
     connect(m_sftp, &SftpSession::transferFinished, this, &SftpWidget::onTransferFinished);
     connect(m_sftp, &SftpSession::dirTreeListed, this, &SftpWidget::dirTreeListed);
+    connect(m_sftp, &SftpSession::dirTreeProgress, this, &SftpWidget::dirTreeProgress);
     m_sftp->start();
 }
 
@@ -202,14 +203,34 @@ void SftpWidget::setRowColors(const QHash<QString, QColor> &colors)
 
 void SftpWidget::downloadTo(const QString &remotePath, const QString &localPath)
 {
-    trackTransfer(remotePath, TransferRegistry::Direction::Download);
+    trackTransfer(remotePath, TransferRegistry::Direction::Download, true);
     m_sftp->download(remotePath, localPath);
 }
 
 void SftpWidget::uploadTo(const QString &localPath, const QString &remotePath)
 {
-    trackTransfer(remotePath, TransferRegistry::Direction::Upload);
+    trackTransfer(remotePath, TransferRegistry::Direction::Upload, true);
     m_sftp->upload(localPath, remotePath);
+}
+
+void SftpWidget::ensureRemoteDir(const QString &path)
+{
+    QString clean = path;
+    while (clean.endsWith(QLatin1Char('/'))) {
+        clean.chop(1);
+    }
+    if (clean.isEmpty()) {
+        return;
+    }
+    // mkdir -p: walk the path components, ignoring "already exists" errors.
+    const QStringList parts = clean.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    QString current = clean.startsWith(QLatin1Char('/')) ? QStringLiteral("/") : QString();
+    for (const QString &part : parts) {
+        current = current.isEmpty() || current == QLatin1String("/")
+                      ? current + part
+                      : current + QLatin1Char('/') + part;
+        m_sftp->makeDir(current);
+    }
 }
 
 void SftpWidget::listDirTree(const QString &path)
@@ -217,11 +238,14 @@ void SftpWidget::listDirTree(const QString &path)
     m_sftp->listDirRecursive(path);
 }
 
-void SftpWidget::trackTransfer(const QString &remotePath, TransferRegistry::Direction direction)
+void SftpWidget::trackTransfer(const QString &remotePath, TransferRegistry::Direction direction, bool quiet)
 {
     const int id = TransferRegistry::instance().beginTransfer(
         remotePath.section(QLatin1Char('/'), -1), direction, m_config.displayName());
     m_transferIds.insert(remotePath, id);
+    if (quiet) {
+        m_quietTransfers.insert(id);
+    }
 }
 
 void SftpWidget::onEntryActivated(const QModelIndex &index)
@@ -433,6 +457,9 @@ void SftpWidget::onTransferProgress(const QString &path, qint64 done, qint64 tot
     const auto idIt = m_transferIds.constFind(path);
     if (idIt != m_transferIds.constEnd()) {
         TransferRegistry::instance().updateProgress(idIt.value(), done, total);
+        if (m_quietTransfers.contains(idIt.value())) {
+            return; // Sync/compare transfers: progress lives in the Transfers panel.
+        }
     }
 
     QProgressDialog *progress = ensureProgressDialog();
@@ -444,7 +471,10 @@ void SftpWidget::onTransferProgress(const QString &path, qint64 done, qint64 tot
 
 void SftpWidget::onTransferStep(const QString &path, int index, int count, const QString &file)
 {
-    Q_UNUSED(path)
+    const auto idIt = m_transferIds.constFind(path);
+    if (idIt != m_transferIds.constEnd() && m_quietTransfers.contains(idIt.value())) {
+        return;
+    }
     QProgressDialog *progress = ensureProgressDialog();
     progress->setLabelText(tr("Downloading %1 (%2/%3)").arg(file).arg(index).arg(count));
 }
@@ -455,9 +485,12 @@ void SftpWidget::onTransferFinished(const QString &path, bool ok, const QString 
     const auto idIt = m_transferIds.constFind(path);
     if (idIt != m_transferIds.constEnd()) {
         TransferRegistry::instance().finishTransfer(idIt.value(), ok, message);
+        m_quietTransfers.remove(idIt.value());
         m_transferIds.erase(idIt);
     }
 
+    // The dialog only exists when an interactive transfer created it; quiet
+    // transfers never open one.
     if (m_progress) {
         m_progress->reset();
         m_progress->deleteLater();

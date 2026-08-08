@@ -5,12 +5,14 @@
 #include <vterm.h>
 #endif
 
+#include <QVector>
 #include <QWidget>
 
 #include <deque>
 #include <vector>
 
 QT_BEGIN_NAMESPACE
+class QLineEdit;
 class QScrollBar;
 QT_END_NAMESPACE
 
@@ -27,6 +29,20 @@ public:
 
     [[nodiscard]] int columns() const { return m_cols; }
     [[nodiscard]] int rows() const { return m_rows; }
+
+    // Terminal-local search (Ctrl+F). Empty query closes the search bar.
+    void showSearchBar();
+    void closeSearchBar();
+    // Jump to the next/previous match; returns false when nothing found.
+    bool searchNext();
+    bool searchPrevious();
+
+    // Plain-text dump of the last maxLines buffer rows (scrollback tail +
+    // live screen), for session logging and the agent "read tab" API.
+    [[nodiscard]] QString bufferText(int maxLines) const;
+    // Windowed variant: fromLine is a 0-based index into the content rows
+    // (empty leading rows trimmed), maxLines caps the result (0 = all).
+    [[nodiscard]] QString bufferTextRange(int fromLine, int maxLines) const;
 
 signals:
     void dataToSend(const QByteArray &data);
@@ -46,6 +62,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
     void contextMenuEvent(QContextMenuEvent *event) override;
     bool focusNextPrevChild(bool next) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
@@ -68,6 +85,15 @@ private:
     [[nodiscard]] QPoint cellAtPosition(const QPoint &pos) const;
     [[nodiscard]] int logicalRowAt(int viewRow) const;
     bool selectionRangeForRow(int logicalRow, int &startCol, int &endCol) const;
+
+    // Search
+    void updateSearch(const QString &text);
+    void goToMatch(bool next);
+    void jumpToMatch(int matchIndex);
+    [[nodiscard]] bool searchBarVisible() const { return m_searchBar != nullptr; }
+    // Column-aligned text of one logical buffer row (wide chars occupy
+    // their grid columns).
+    [[nodiscard]] QString lineText(int logicalRow) const;
 
 #ifdef HSSH_HAS_LIBVTERM
     struct ScrollbackCell {
@@ -105,7 +131,8 @@ private:
     void drawCursor(QPainter *painter);
     template <typename Fetch>
     void paintRowCells(QPainter *painter, int row, int startCol, int endCol,
-                       int selStartCol, int selEndCol, Fetch &&fetch);
+                       int selStartCol, int selEndCol, const QVector<int> &searchMatches,
+                       Fetch &&fetch);
     QColor colorFromVTerm(VTermColor color, bool isForeground) const;
     [[nodiscard]] QString lineTextRange(int logicalRow, int startCol, int endCol) const;
     void onScrollbackLinePushed(int oldSize);
@@ -119,6 +146,7 @@ private:
     QScrollBar *m_scrollBar = nullptr;
     QFont m_font;
     QColor m_selectionBg = QColor(0x26, 0x4f, 0x78);
+    QColor m_searchBg = QColor(0x8a, 0x6d, 0x1a);
     bool m_selecting = false;   // mouse drag in progress
     bool m_hasSelection = false;
     int m_selAnchorRow = 0;     // logical buffer row of drag start
@@ -134,6 +162,13 @@ private:
     int m_scrollOffset = 0; // rows scrolled up from the bottom of the buffer
     bool m_cursorVisible = true;
     QPoint m_cursorPos; // cell coordinates (col, row)
+
+    QLineEdit *m_searchBar = nullptr;
+    QString m_searchText;
+    // Matches on the visible buffer as {row, startCol, endCol} (inclusive).
+    QVector<QVector<int>> m_searchRowMatches; // logical row -> flat [start,end,...]
+    int m_currentMatch = -1;                  // index into m_searchMatches
+    QVector<int> m_searchMatches;             // flat [row,start,end] triplets
 };
 
 } // namespace hssh
