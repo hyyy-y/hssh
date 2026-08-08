@@ -133,6 +133,7 @@ set(HSSH_SOURCES
     src/utils/TextDiff.cpp
     src/utils/TextDiff.h
     resources/resources.qrc
+    resources/hssh.rc
 )
 
 # Platform-specific local shell backend sources.
@@ -223,6 +224,41 @@ install(TARGETS ${PROJECT_NAME}
     RUNTIME DESTINATION bin
     BUNDLE DESTINATION .
 )
+
+# One-click portable package (Windows): `cmake --build . --target dist`
+# Collects hssh.exe + Qt runtime + plugins + bundled conpty into dist/ and
+# zips it as hssh-portable-win64.zip next to the build directory.
+if(WIN32)
+    set(HSSH_DIST_DIR ${CMAKE_BINARY_DIR}/dist)
+    find_program(HSSH_WINDEPLOYQT_EXE windeployqt
+        HINTS ${Qt6_DIR}/../../../bin ${Qt6_DIR}/../../bin)
+    if(HSSH_WINDEPLOYQT_EXE)
+        add_custom_target(portable
+            COMMAND ${CMAKE_COMMAND} -E rm -rf ${HSSH_DIST_DIR}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${HSSH_DIST_DIR}
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:${PROJECT_NAME}> ${HSSH_DIST_DIR}/
+            COMMAND ${HSSH_WINDEPLOYQT_EXE} --release --no-translations
+                --compiler-runtime --dir ${HSSH_DIST_DIR}
+                $<TARGET_FILE:${PROJECT_NAME}>
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/LICENSE
+                ${CMAKE_SOURCE_DIR}/README.md
+                ${CMAKE_SOURCE_DIR}/docs/agent.md
+                ${HSSH_DIST_DIR}/
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/third_party/conpty/conpty.dll
+                ${CMAKE_SOURCE_DIR}/third_party/conpty/OpenConsole.exe
+                ${HSSH_DIST_DIR}/
+            COMMAND powershell -NoProfile -Command
+                "Compress-Archive -Path '${HSSH_DIST_DIR}/*' -DestinationPath '${CMAKE_BINARY_DIR}/hssh-portable-win64.zip' -Force"
+            DEPENDS ${PROJECT_NAME}
+            COMMENT "Packaging portable build into dist/ and hssh-portable-win64.zip"
+        )
+    else()
+        message(WARNING "windeployqt not found; 'portable' target unavailable")
+    endif()
+endif()
 
 # Tests
 if(BUILD_TESTING)

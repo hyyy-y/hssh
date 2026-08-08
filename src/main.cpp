@@ -2,6 +2,7 @@
 #include <QCoreApplication>
 #include <QCommandLineParser>
 #include <QFile>
+#include <QIcon>
 #include <QInputDialog>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -428,6 +429,7 @@ int main(int argc, char *argv[])
     app.setOrganizationName(QStringLiteral("hssh-project"));
     app.setApplicationDisplayName(QStringLiteral("hssh - Modern SSH Client"));
     app.setApplicationVersion(QStringLiteral(HSSH_VERSION_STRING));
+    app.setWindowIcon(QIcon(QStringLiteral(":/hssh.ico")));
 
     loadQtTranslator(app);
     loadApplicationTranslator(app);
