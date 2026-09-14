@@ -2,6 +2,7 @@
 #define HSSH_CORE_SSHSESSION_H
 
 #include "core/SessionConfig.h"
+#include "core/transport/ITransport.h"
 
 #include <QByteArray>
 #include <QObject>
@@ -18,7 +19,7 @@ namespace hssh {
 
 class PortForwardManager;
 
-class SshSession : public QObject {
+class SshSession : public QObject, public ITransport {
     Q_OBJECT
 
 public:
@@ -39,10 +40,10 @@ public:
 
     [[nodiscard]] State state() const;
     [[nodiscard]] QString errorString() const;
-    [[nodiscard]] bool isConnected() const;
+    [[nodiscard]] bool isConnected() const override;
 
-    void connectToHost();
-    void disconnect();
+    void connectToHost() override;
+    void disconnect() override;
 
     // Execute a one-shot command. Emits execFinished on completion.
     void exec(const QString &command);
@@ -50,6 +51,10 @@ public:
     // Interactive shell (placeholder for Phase 4 terminal integration).
     void writeShell(const QByteArray &data);
     void setShellSize(int columns, int rows);
+
+    // ITransport interface (aliases to the shell API above).
+    void write(const QByteArray &data) override { writeShell(data); }
+    void resize(int columns, int rows) override { setShellSize(columns, rows); }
 
 #ifdef HSSH_HAS_LIBSSH
     // Raw libssh handle plus the mutex that serializes every libssh call on

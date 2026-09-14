@@ -12,8 +12,11 @@ set(COMMON_SOURCES
     ../src/core/SessionRepository.cpp
     ../src/core/PortForward.cpp
     ../src/core/SftpSession.cpp
+    ../src/core/ChannelCopySession.cpp
+    ../src/core/TransferSession.h
     ../src/core/SshConnect.cpp
     ../src/core/SshSession.cpp
+    ../src/core/transport/TransportFactory.cpp
     ../src/core/ConnectionManager.cpp
     ../src/terminal/ShellProcess.cpp
     ../src/terminal/LocalShellProcess.cpp
@@ -133,10 +136,27 @@ target_link_libraries(test_textdiff PRIVATE ${COMMON_LIBS})
 add_test(NAME test_textdiff COMMAND test_textdiff)
 set_tests_properties(test_textdiff PROPERTIES ENVIRONMENT "${TEST_ENV}")
 
+set(AGENT_SOURCES
+    ../src/agent/AgentAudit.cpp
+    ../src/agent/AgentHttpServer.cpp
+)
+
+add_executable(test_agent_http test_agent_http.cpp ${COMMON_SOURCES} ${AGENT_SOURCES})
+target_include_directories(test_agent_http PRIVATE ${COMMON_INCLUDES})
+target_link_libraries(test_agent_http PRIVATE ${COMMON_LIBS})
+add_test(NAME test_agent_http COMMAND test_agent_http)
+set_tests_properties(test_agent_http PROPERTIES ENVIRONMENT "${TEST_ENV}")
+
 if(libssh_FOUND)
     add_executable(test_sftp test_sftp.cpp ${COMMON_SOURCES})
     target_include_directories(test_sftp PRIVATE ${COMMON_INCLUDES})
     target_link_libraries(test_sftp PRIVATE ${COMMON_LIBS})
     add_test(NAME test_sftp COMMAND test_sftp)
     set_tests_properties(test_sftp PROPERTIES ENVIRONMENT "${TEST_ENV}")
+
+    add_executable(test_channel_copy test_channel_copy.cpp ${COMMON_SOURCES})
+    target_include_directories(test_channel_copy PRIVATE ${COMMON_INCLUDES})
+    target_link_libraries(test_channel_copy PRIVATE ${COMMON_LIBS})
+    add_test(NAME test_channel_copy COMMAND test_channel_copy)
+    set_tests_properties(test_channel_copy PROPERTIES ENVIRONMENT "${TEST_ENV}")
 endif()

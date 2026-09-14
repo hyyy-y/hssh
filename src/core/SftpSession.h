@@ -2,6 +2,7 @@
 #define HSSH_CORE_SFTPSESSION_H
 
 #include "SessionConfig.h"
+#include "TransferSession.h"
 
 #include <QList>
 #include <QObject>
@@ -41,7 +42,7 @@ struct RemoteFileEntry {
 // sessions are not thread-safe, so the shell channel's ssh_session is never
 // shared). All public request methods are queued onto the worker thread;
 // results arrive via signals.
-class SftpSession : public QObject {
+class SftpSession : public TransferSession {
     Q_OBJECT
 
 public:
@@ -49,9 +50,9 @@ public:
     ~SftpSession() override;
 
     // Spin up the worker thread and connect asynchronously.
-    void start();
+    void start() override;
     // Cancel any running transfer, stop the thread, close the connection.
-    void stop();
+    void stop() override;
 
     void listDir(const QString &path);
     // Recursive walk of a remote directory tree (folder compare). Results
@@ -62,28 +63,34 @@ public:
     void renameEntry(const QString &oldPath, const QString &newPath);
     void removeFile(const QString &path);
     void removeDir(const QString &path);
-    void download(const QString &remotePath, const QString &localPath);
+    // Downloads remotePath to localPath. When verify is set (default) the
+    // downloaded content is checked against the remote (size re-stat + md5)
+    // and a mismatch retries once with a FULL re-download over a fresh
+    // connection — a partial file is never resumed into a suspect prefix
+    // (null blocks from a concurrently rewritten remote file would
+    // otherwise be cemented by size-only resume forever).
+    void download(const QString &remotePath, const QString &localPath, bool verify = true) override;
     // Recursively download a remote directory into localDir (created if
     // missing). Progress/finished signals use remotePath as the key, with
     // byte counters cumulative across all files in the tree.
     void downloadDir(const QString &remotePath, const QString &localDir);
-    void upload(const QString &localPath, const QString &remotePath);
-    void cancelTransfer();
+    // Uploads localPath to remotePath. When verify is set (default) the
+    // remote content is checksummed after the transfer (remote md5sum, or
+    // an SFTP read-back when no shell is available) and a mismatch makes
+    // the transfer FAIL loudly instead of leaving silent corruption.
+    void upload(const QString &localPath, const QString &remotePath, bool verify = true) override;
+    void cancelTransfer() override;
 
 signals:
     void connected(const QString &homePath);
-    void errorOccurred(const QString &message);
     void dirListed(const QString &path, const QList<hssh::SftpFileInfo> &entries);
     void dirTreeListed(const QString &path, const QList<hssh::RemoteFileEntry> &entries);
     // Periodic progress during a recursive tree walk (compare analysis).
     void dirTreeProgress(const QString &path, int entriesScanned);
     void canonicalized(const QString &path, const QString &canonicalPath);
     void operationFinished(const QString &operation, bool ok, const QString &message);
-    void transferProgress(const QString &path, qint64 bytesDone, qint64 bytesTotal);
-    // Directory downloads: which file is currently being transferred
-    // (1-based index), so the UI can show "name (3/12)".
-    void transferStep(const QString &path, int fileIndex, int fileCount, const QString &currentFile);
-    void transferFinished(const QString &path, bool ok, const QString &message);
+    // errorOccurred / transferProgress / transferStep / transferFinished are
+    // inherited from TransferSession.
 
 private:
     void doConnect();
@@ -93,10 +100,36 @@ private:
     void doRenameEntry(const QString &oldPath, const QString &newPath);
     void doRemoveFile(const QString &path);
     void doRemoveDir(const QString &path);
-    void doDownload(const QString &remotePath, const QString &localPath);
+    void doDownload(const QString &remotePath, const QString &localPath, bool verify);
+    // One full download attempt. allowResume permits continuing a partial
+    // local file (first attempt only — after a verification failure the
+    // prefix is untrusted). On success `note` carries the MD5 hex (and
+    // whether it was verified). `retryable` marks failures that deserve a
+    // fresh-connection full retry (content mismatch / remote file changed
+    // mid-transfer).
+    bool downloadAttempt(const QString &remotePath, const QString &localPath, bool verify,
+                         bool allowResume, QString *error, QString *note, bool *retryable);
     void doDownloadDir(const QString &remotePath, const QString &localDir);
-    void doUpload(const QString &localPath, const QString &remotePath);
+    void doUpload(const QString &localPath, const QString &remotePath, bool verify);
+    // One full upload attempt. On success `note` carries the local MD5 hex
+    // (and whether it was verified against the remote). On failure
+    // `retryable` marks failures that deserve a fresh-connection retry
+    // (short write / content mismatch: the channel may be wedged).
+    bool uploadAttempt(const QString &localPath, const QString &remotePath, bool verify,
+                       QString *error, QString *note, bool *retryable);
     void doListDirRecursive(const QString &path);
+
+    // Post-upload integrity check. Returns true when the remote file's MD5
+    // matches localMd5Hex. Sets *unavailable (with a reason) when neither
+    // a remote md5sum nor an SFTP read-back could be performed.
+    bool verifyUpload(const QString &remotePath, const QByteArray &localMd5Hex,
+                      QString *unavailable);
+    // Runs "md5sum <path>" over an exec channel on the SFTP connection;
+    // returns the lowercase hex digest or an empty string on any failure.
+    QByteArray remoteMd5(const QString &remotePath);
+    // Re-reads the remote file over SFTP and returns its MD5 hex digest,
+    // or an empty string on failure.
+    QByteArray remoteMd5ReadBack(const QString &remotePath);
 
     // Recursive walk collecting entries under remoteDir. Files are always
     // collected; directories only when includeDirs is set (compare needs
@@ -105,11 +138,17 @@ private:
                             QList<RemoteFileEntry> &out, QString &error,
                             bool includeDirs = false);
     // Streams one remote file into an already-open local file; `done` is the
-    // transfer-wide cumulative byte counter reported under `key`.
+    // transfer-wide cumulative byte counter reported under `key`. When
+    // startOffset > 0 the remote read is seeked there first (resume).
     bool streamDownload(const QString &remoteFile, QFile &local, const QString &key,
-                        qint64 &done, qint64 total, QString &error);
+                        qint64 &done, qint64 total, QString &error,
+                        qint64 startOffset = 0);
 
     void doCleanup();
+    // Tears down and re-establishes the SSH+SFTP connection (worker thread
+    // only). Used before an upload retry: a connection that produced a
+    // desynced byte stream may be wedged and would fail the retry too.
+    bool reconnectSftp();
     [[nodiscard]] QString sftpError() const;
 
     SessionConfig m_config;

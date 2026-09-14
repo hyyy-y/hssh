@@ -172,6 +172,12 @@ public:
     SshSession::State state = SshSession::State::Disconnected;
     QString errorString;
     SessionConfig config;
+    // Last requested shell size. setShellSize before the channel is up must
+    // not be dropped: it is applied when the pty is requested and re-applied
+    // right after the shell opens (covers resizes that arrived while
+    // connecting).
+    int pendingShellCols = -1;
+    int pendingShellRows = -1;
 
     ~LibSshImpl()
     {
@@ -652,13 +658,17 @@ void SshSession::openShellChannelLibSsh()
         return;
     }
 
-    int rc = ssh_channel_open_session(d->ssh->shellChannel);
+    int     rc = ssh_channel_open_session(d->ssh->shellChannel);
     if (rc != SSH_OK) {
         failAndCleanup(QString::fromUtf8(ssh_get_error(d->ssh->session)));
         return;
     }
 
-    rc = ssh_channel_request_pty_size(d->ssh->shellChannel, "xterm-256color", 80, 24);
+    // Use the size the widget last asked for instead of the 80x24 default;
+    // pre-connection setShellSize calls are cached in pendingShellCols/Rows.
+    const int ptyCols = d->ssh->pendingShellCols > 0 ? d->ssh->pendingShellCols : 80;
+    const int ptyRows = d->ssh->pendingShellRows > 0 ? d->ssh->pendingShellRows : 24;
+    rc = ssh_channel_request_pty_size(d->ssh->shellChannel, "xterm-256color", ptyCols, ptyRows);
     if (rc != SSH_OK) {
         failAndCleanup(QString::fromUtf8(ssh_get_error(d->ssh->session)));
         return;
@@ -668,6 +678,15 @@ void SshSession::openShellChannelLibSsh()
     if (rc != SSH_OK) {
         failAndCleanup(QString::fromUtf8(ssh_get_error(d->ssh->session)));
         return;
+    }
+
+    // If a resize arrived while connecting and differs from what we just
+    // requested, push the newest size now so the remote shell never lingers
+    // at a stale geometry (wrapped readline redraws otherwise glue lines).
+    if (d->ssh->pendingShellCols > 0 && d->ssh->pendingShellRows > 0
+        && (d->ssh->pendingShellCols != ptyCols || d->ssh->pendingShellRows != ptyRows)) {
+        ssh_channel_change_pty_size(d->ssh->shellChannel,
+                                    d->ssh->pendingShellCols, d->ssh->pendingShellRows);
     }
 
     d->state = State::Connected;
@@ -841,6 +860,14 @@ void SshSession::writeShellLibSsh(const QByteArray &data)
 
 void SshSession::setShellSizeLibSsh(int columns, int rows)
 {
+    if (columns <= 0 || rows <= 0) {
+        return;
+    }
+    // Always cache the newest request: pre-connection calls used to be
+    // silently dropped, leaving the remote shell at 80x24 forever.
+    d->ssh->pendingShellCols = columns;
+    d->ssh->pendingShellRows = rows;
+
     if (d->state != State::Connected || !d->ssh->shellChannel) {
         return;
     }

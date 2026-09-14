@@ -13,7 +13,12 @@ namespace hssh {
 
 enum class SessionType {
     Ssh,
-    Local
+    Local,
+    // Planned transports (Phase 3); enum values reserved so stored sessions
+    // and JSON round-trips stay stable.
+    Telnet,
+    Serial,
+    Raw
 };
 
 enum class AuthMethod {
@@ -65,6 +70,12 @@ public:
     [[nodiscard]] QStringList postLoginCommands() const;
     void setPostLoginCommands(const QStringList &commands);
 
+    // Serial transport (SessionType::Serial): device name (COM3, /dev/ttyUSB0).
+    [[nodiscard]] QString serialPort() const;
+    void setSerialPort(const QString &port);
+    [[nodiscard]] int serialBaudRate() const;
+    void setSerialBaudRate(int baud);
+
     // Connection robustness.
     // Keep-alive interval in seconds; 0 disables keep-alive probes.
     [[nodiscard]] int keepAliveSeconds() const;
@@ -94,6 +105,9 @@ private:
     QString m_privateKeyPath;
     SecureString m_keyPassphrase;
     QStringList m_postLoginCommands;
+    // Serial transport settings.
+    QString m_serialPort;
+    int m_serialBaudRate = 115200;
     int m_keepAliveSeconds = 30;
     bool m_autoReconnect = false;
 };

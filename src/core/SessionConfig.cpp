@@ -137,6 +137,26 @@ void SessionConfig::setPostLoginCommands(const QStringList &commands)
     m_postLoginCommands = commands;
 }
 
+QString SessionConfig::serialPort() const
+{
+    return m_serialPort;
+}
+
+void SessionConfig::setSerialPort(const QString &port)
+{
+    m_serialPort = port;
+}
+
+int SessionConfig::serialBaudRate() const
+{
+    return m_serialBaudRate;
+}
+
+void SessionConfig::setSerialBaudRate(int baud)
+{
+    m_serialBaudRate = baud > 0 ? baud : 115200;
+}
+
 int SessionConfig::keepAliveSeconds() const
 {
     return m_keepAliveSeconds;
@@ -162,6 +182,14 @@ bool SessionConfig::isValid() const
     if (m_sessionType == SessionType::Local) {
         return !m_shellType.isEmpty();
     }
+    // Telnet/Serial/Raw are accepted structurally (host/port or device); the
+    // transports arrive in Phase 3.
+    if (m_sessionType == SessionType::Telnet || m_sessionType == SessionType::Raw) {
+        return !m_host.isEmpty() && m_port > 0 && m_port <= 65535;
+    }
+    if (m_sessionType == SessionType::Serial) {
+        return !m_serialPort.isEmpty();
+    }
     return !m_host.isEmpty() && m_port > 0 && m_port <= 65535;
 }
 
@@ -172,6 +200,15 @@ QString SessionConfig::displayName() const
     }
     if (m_sessionType == SessionType::Local) {
         return m_shellType.isEmpty() ? QStringLiteral("Local Terminal") : m_shellType;
+    }
+    if (m_sessionType == SessionType::Serial) {
+        return m_serialPort.isEmpty() ? QStringLiteral("Serial") : QStringLiteral("Serial: %1").arg(m_serialPort);
+    }
+    if (m_sessionType == SessionType::Telnet) {
+        return m_host.isEmpty() ? QStringLiteral("Telnet") : QStringLiteral("Telnet: %1:%2").arg(m_host).arg(m_port);
+    }
+    if (m_sessionType == SessionType::Raw) {
+        return m_host.isEmpty() ? QStringLiteral("Raw TCP") : QStringLiteral("Raw: %1:%2").arg(m_host).arg(m_port);
     }
     if (!m_host.isEmpty()) {
         if (!m_username.isEmpty()) {
@@ -198,6 +235,8 @@ QVariantMap SessionConfig::toMap() const
     map[QStringLiteral("privateKeyPath")] = m_privateKeyPath;
     map[QStringLiteral("keyPassphrase")] = QString::fromUtf8(m_keyPassphrase.toByteArray().toBase64());
     map[QStringLiteral("postLoginCommands")] = m_postLoginCommands;
+    map[QStringLiteral("serialPort")] = m_serialPort;
+    map[QStringLiteral("serialBaudRate")] = m_serialBaudRate;
     map[QStringLiteral("keepAliveSeconds")] = m_keepAliveSeconds;
     map[QStringLiteral("autoReconnect")] = m_autoReconnect;
     return map;
@@ -224,6 +263,8 @@ SessionConfig SessionConfig::fromMap(const QVariantMap &map)
     config.setKeyPassphrase(SecureString(passphraseBytes));
 
     config.setPostLoginCommands(map.value(QStringLiteral("postLoginCommands")).toStringList());
+    config.setSerialPort(map.value(QStringLiteral("serialPort")).toString());
+    config.setSerialBaudRate(map.value(QStringLiteral("serialBaudRate"), 115200).toInt());
     config.setKeepAliveSeconds(map.value(QStringLiteral("keepAliveSeconds"), 30).toInt());
     config.setAutoReconnect(map.value(QStringLiteral("autoReconnect")).toBool());
     return config;

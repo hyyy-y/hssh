@@ -13,6 +13,7 @@
 #include <QPaintEvent>
 #include <QScrollBar>
 #include <QStyle>
+#include <QTimer>
 #include <QWheelEvent>
 
 #include <optional>
@@ -123,6 +124,13 @@ void TerminalWidget::feedData(const QByteArray &data)
         vterm_input_write(m_vterm, data.constData(), static_cast<size_t>(data.size()));
         vterm_screen_flush_damage(m_screen);
         scrollToBottom();
+        // Flush terminal-to-remote responses produced while processing this
+        // input (cursor-position reports \x1b[6n, device attributes, etc.).
+        // readline and other line editors issue such queries when redrawing
+        // the prompt; if the reply is never sent (e.g. input driven through
+        // the agent API, which bypasses keyPressEvent), their line redraws
+        // misplace content and the display shows glued/disordered lines.
+        sendOutputBuffer();
         // Matches may point at rows that were just pushed out of the buffer;
         // they are rebuilt on the next search action.
         m_searchRowMatches.clear();
@@ -474,7 +482,14 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event)
         mod = static_cast<VTermModifier>(mod | VTERM_MOD_ALT);
 
     const QString text = event->text();
+    // Ctrl+letter arrives as a control character in text() (e.g. 0x03 for
+    // Ctrl+C). Feeding that to vterm_keyboard_unichar with VTERM_MOD_CTRL
+    // makes libvterm emit a CSI u sequence the remote shell can't parse;
+    // route it through the Key_A..Key_Z handler below instead.
+    const bool ctrlControlChar = (event->modifiers() & Qt::ControlModifier)
+        && !text.isEmpty() && text.at(0).unicode() < 0x20;
     if (!text.isEmpty()
+        && !ctrlControlChar
         && event->key() != Qt::Key_Control
         && event->key() != Qt::Key_Shift
         && event->key() != Qt::Key_Alt
@@ -605,6 +620,9 @@ void TerminalWidget::updateTerminalSize()
         m_cols = newCols;
         m_rows = newRows;
         vterm_set_size(m_vterm, m_rows, m_cols);
+        // A size change may queue a reply (or the remote shell re-queries
+        // after SIGWINCH); make sure it reaches the wire promptly.
+        sendOutputBuffer();
         updateScrollBar();
         emit sizeChanged(m_cols, m_rows);
     }
@@ -1111,6 +1129,33 @@ void TerminalWidget::focusOutEvent(QFocusEvent *event)
 }
 
 #ifdef HSSH_HAS_LIBVTERM
+void TerminalWidget::scheduleRepaint(const QRect &rect)
+{
+#ifdef HSSH_HAS_LIBVTERM
+    if (rect.isEmpty()) {
+        return;
+    }
+    m_pendingRepaint = m_pendingRepaint.isNull() ? rect : m_pendingRepaint.united(rect);
+    if (m_repaintScheduled) {
+        return;
+    }
+    m_repaintScheduled = true;
+    // ~60 fps cap: damage arriving in bursts (streaming output, resize
+    // redraws) is merged into one partial repaint per frame instead of a
+    // full-widget repaint per event-loop turn.
+    QTimer::singleShot(16, this, [this]() {
+        m_repaintScheduled = false;
+        const QRect rect = m_pendingRepaint;
+        m_pendingRepaint = QRect();
+        if (!rect.isNull()) {
+            update(rect);
+        }
+    });
+#else
+    Q_UNUSED(rect)
+#endif
+}
+
 int TerminalWidget::screenDamage(VTermRect rect, void *user)
 {
     auto *widget = static_cast<TerminalWidget *>(user);
@@ -1118,26 +1163,38 @@ int TerminalWidget::screenDamage(VTermRect rect, void *user)
     const int top = widget->m_margin + rect.start_row * widget->m_cellHeight;
     const int right = widget->m_margin + rect.end_col * widget->m_cellWidth;
     const int bottom = widget->m_margin + rect.end_row * widget->m_cellHeight;
-    widget->update(left, top, right - left, bottom - top);
+    widget->scheduleRepaint(QRect(left, top, right - left, bottom - top));
     return 1;
 }
 
 int TerminalWidget::screenMoveRect(VTermRect dest, VTermRect src, void *user)
 {
-    Q_UNUSED(dest)
-    Q_UNUSED(src)
     auto *widget = static_cast<TerminalWidget *>(user);
-    widget->update();
+    // Scroll: only the affected region needs repainting, not the whole widget.
+    const auto toPixels = [widget](const VTermRect &r) {
+        return QRect(widget->m_margin + r.start_col * widget->m_cellWidth,
+                     widget->m_margin + r.start_row * widget->m_cellHeight,
+                     (r.end_col - r.start_col) * widget->m_cellWidth,
+                     (r.end_row - r.start_row) * widget->m_cellHeight);
+    };
+    widget->scheduleRepaint(toPixels(dest).united(toPixels(src)));
     return 1;
 }
 
 int TerminalWidget::screenMoveCursor(VTermPos pos, VTermPos oldpos, int visible, void *user)
 {
-    Q_UNUSED(oldpos)
     auto *widget = static_cast<TerminalWidget *>(user);
     widget->m_cursorVisible = visible != 0;
     widget->m_cursorPos = QPoint(pos.col, pos.row);
-    widget->update();
+    // Cursor motion (readline redraws one cell per keystroke) only dirties
+    // the old and new cursor cells; a full repaint per keystroke made a
+    // maximized terminal visibly laggy.
+    const auto cellRect = [widget](const VTermPos &p) {
+        return QRect(widget->m_margin + p.col * widget->m_cellWidth,
+                     widget->m_margin + p.row * widget->m_cellHeight,
+                     widget->m_cellWidth, widget->m_cellHeight);
+    };
+    widget->scheduleRepaint(cellRect(pos).united(cellRect(oldpos)));
     return 1;
 }
 
@@ -1206,19 +1263,27 @@ int TerminalWidget::screenSbPopLine(int cols, VTermScreenCell *cells, void *user
     // Scrollback geometry changes in ways a selection can't track; drop it.
     widget->clearSelection();
     const auto &line = widget->m_scrollback.back();
-    for (int i = 0; i < cols; ++i) {
-        if (i < static_cast<int>(line.size())) {
-            cells[i] = {};
-            cells[i].width = line[i].width;
-            cells[i].attrs = line[i].attrs;
-            cells[i].fg = line[i].fg;
-            cells[i].bg = line[i].bg;
-            for (int c = 0; c < VTERM_MAX_CHARS_PER_CELL; ++c) {
-                cells[i].chars[c] = line[i].chars[c];
-            }
-        } else {
-            cells[i] = {};
+    // The scrollback stores one entry per glyph (wide-char continuation cells
+    // are omitted). Restore them at their ORIGINAL grid columns: a wide glyph
+    // (width=2) must be followed by a width=0 continuation cell, otherwise
+    // every glyph after it shifts left and the line renders glued/disordered.
+    int out = 0;
+    for (const ScrollbackCell &sc : line) {
+        if (out >= cols) {
+            break;
         }
+        cells[out] = {};
+        cells[out].width = sc.width;
+        cells[out].attrs = sc.attrs;
+        cells[out].fg = sc.fg;
+        cells[out].bg = sc.bg;
+        for (int c = 0; c < VTERM_MAX_CHARS_PER_CELL; ++c) {
+            cells[out].chars[c] = sc.chars[c];
+        }
+        out += sc.width > 0 ? sc.width : 1;
+    }
+    for (int i = out; i < cols; ++i) {
+        cells[i] = {};
     }
     widget->m_scrollback.pop_back();
     widget->updateScrollBar();

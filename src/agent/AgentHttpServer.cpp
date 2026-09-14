@@ -1,17 +1,25 @@
 #include "AgentHttpServer.h"
 
 #include "agent/AgentAudit.h"
-#include "agent/AgentSessionRegistry.h"
+#include "core/ChannelCopySession.h"
+#include "core/SftpSession.h"
+#include "core/TransferSession.h"
 #include "hssh/Version.h"
 #include "utils/Config.h"
 #include "utils/Crypto.h"
 
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkInterface>
+#include <QRegularExpression>
+#include <QSet>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QTimer>
 #include <QUuid>
 #include <QUrl>
 
@@ -25,6 +33,158 @@ struct HttpRequest {
     QByteArray body;
 };
 
+namespace {
+
+// Display/lookup name of a tab entry: saved-session name, else host, else title.
+QString tabNameOf(const QVariantMap &tab)
+{
+    QString name = tab.value(QStringLiteral("sessionName")).toString();
+    if (name.isEmpty()) {
+        name = tab.value(QStringLiteral("host")).toString();
+    }
+    if (name.isEmpty()) {
+        name = tab.value(QStringLiteral("title")).toString();
+    }
+    return name;
+}
+
+// Adds "name", "ref" (name[:ordinal]) and "target" (user@host:port) to
+// every entry of a listTabs() result, plus consistency flags:
+//   "stale"        — the tab's sessionName resolves to a saved session whose
+//                    host/port/username now DIFFERS from the tab's config
+//                    (the session was edited after the tab opened; name-based
+//                    routing would silently hit this tab — the 2026-09-11
+//                    wrong-machine accident).
+//   "peerMismatch" — the tab reports a live peer IP that differs from its
+//                    configured host (only flagged when the configured host
+//                    is an IP literal; hostname-vs-resolved-IP is normal).
+// The ref is stable against cross-machine index drift: "board-a:2" always
+// means the 2nd tab of board-a, never some other machine's tab.
+void annotateTabRefs(QVariantList &tabs, const QVariantList &savedSessions)
+{
+    QHash<QString, int> totals;
+    for (const QVariant &v : tabs) {
+        ++totals[tabNameOf(v.toMap())];
+    }
+    QHash<QString, int> counts;
+    for (QVariant &v : tabs) {
+        QVariantMap m = v.toMap();
+        const QString name = tabNameOf(m);
+        const int ordinal = ++counts[name];
+        m[QStringLiteral("name")] = name;
+        m[QStringLiteral("ref")] = totals.value(name) > 1
+            ? name + QLatin1Char(':') + QString::number(ordinal)
+            : name;
+
+        const bool isSsh = m.value(QStringLiteral("type")).toString() == QLatin1String("ssh");
+        const QString host = m.value(QStringLiteral("host")).toString();
+        const QString peer = m.value(QStringLiteral("peer")).toString();
+        if (isSsh) {
+            // The peer (live socket address) is the ground truth when known.
+            const QString effective = peer.isEmpty() ? host : peer;
+            m[QStringLiteral("target")] =
+                QStringLiteral("%1@%2:%3")
+                    .arg(m.value(QStringLiteral("username")).toString(),
+                         effective,
+                         m.value(QStringLiteral("port")).toString());
+            // IP-literal host vs live peer: a real mismatch worth flagging.
+            const QHostAddress hostAddr(host);
+            if (!peer.isEmpty() && !hostAddr.isNull()
+                && hostAddr != QHostAddress(peer)) {
+                m[QStringLiteral("peerMismatch")] = true;
+            }
+            // Saved-session drift: same name, different endpoint now.
+            const QString sessionName = m.value(QStringLiteral("sessionName")).toString();
+            if (!sessionName.isEmpty()) {
+                for (const QVariant &sv : savedSessions) {
+                    const QVariantMap s = sv.toMap();
+                    if (s.value(QStringLiteral("name")).toString() != sessionName
+                        && s.value(QStringLiteral("displayName")).toString() != sessionName) {
+                        continue;
+                    }
+                    const bool differs =
+                        s.value(QStringLiteral("host")).toString() != host
+                        || s.value(QStringLiteral("port")).toInt()
+                               != m.value(QStringLiteral("port")).toInt()
+                        || s.value(QStringLiteral("username")).toString()
+                               != m.value(QStringLiteral("username")).toString();
+                    if (differs) {
+                        m[QStringLiteral("stale")] = true;
+                        m[QStringLiteral("savedTarget")] =
+                            QStringLiteral("%1@%2:%3")
+                                .arg(s.value(QStringLiteral("username")).toString(),
+                                     s.value(QStringLiteral("host")).toString(),
+                                     s.value(QStringLiteral("port")).toString());
+                    }
+                    break;
+                }
+            }
+        } else {
+            m[QStringLiteral("target")] = QStringLiteral("local");
+        }
+        v = m;
+    }
+}
+
+// Resolves a tab path segment to a positional index. A plain integer keeps
+// the legacy meaning; anything else is "<name>" or "<name>:<ordinal>"
+// matching sessionName/host/title (ordinal counts matches in tab order,
+// 1-based; omitting it requires an unambiguous single match).
+int resolveTabRef(const QVariantList &tabs, const QString &ref, QString *error)
+{
+    bool digitsOnly = !ref.isEmpty();
+    for (const QChar c : ref) {
+        if (!c.isDigit()) {
+            digitsOnly = false;
+            break;
+        }
+    }
+    if (digitsOnly) {
+        return ref.toInt(); // legacy positional index
+    }
+    const QString decoded = QString::fromUtf8(QByteArray::fromPercentEncoding(ref.toUtf8()));
+    QString name = decoded;
+    int ordinal = 1;
+    const int colon = decoded.lastIndexOf(QLatin1Char(':'));
+    if (colon > 0) {
+        bool ok = false;
+        const int n = decoded.mid(colon + 1).toInt(&ok);
+        if (ok && n >= 1) {
+            name = decoded.left(colon);
+            ordinal = n;
+        }
+    }
+    int matches = 0;
+    int found = -1;
+    for (const QVariant &v : tabs) {
+        const QVariantMap m = v.toMap();
+        const QStringList keys{tabNameOf(m), m.value(QStringLiteral("host")).toString(),
+                               m.value(QStringLiteral("title")).toString()};
+        if (!keys.contains(name)) {
+            continue;
+        }
+        ++matches;
+        if (matches == ordinal) {
+            found = m.value(QStringLiteral("index")).toInt();
+        }
+    }
+    if (found >= 0) {
+        // Multiple matches with a bare name: first in tab order. Callers who
+        // need a specific tab should use the explicit "<name>:<ordinal>" ref
+        // advertised by GET /api/v1/tabs.
+        return found;
+    }
+    if (error) {
+        *error = matches > 0
+            ? QStringLiteral("Tab ref '%1': only %2 tab(s) match '%3'")
+                  .arg(decoded).arg(matches).arg(name)
+            : QStringLiteral("Unknown tab: %1").arg(decoded);
+    }
+    return -1;
+}
+
+} // namespace
+
 class AgentHttpServer::Impl {
 public:
     // One in-flight async operation per request id; detail carries the
@@ -34,12 +194,50 @@ public:
         QString action;
         QString sessionId;
         QString detail;
+        qint64 startedMs = 0; // health checks report latency
     };
 
-    AgentSessionRegistry registry;
+    // A file transfer running for a GUI tab (via its own connection). The
+    // worker is an SFTP, scp or base64-shell session; "auto" walks the
+    // fallback chain (sftp -> scp -> shell) while zero bytes have moved.
+    struct TabTransfer {
+        TransferSession *worker = nullptr;
+        int tabIndex = -1;
+        SessionConfig config;
+        bool isUpload = false;
+        QString localPath;
+        QString remotePath;
+        bool verify = true;
+        QStringList remainingMethods; // auto-fallback chain
+        qint64 bytesDone = 0;
+    };
+
+    // A visible exec running in a GUI tab: the command was typed into the
+    // terminal bracketed by unique begin/end markers; a timer polls the
+    // buffer until the end marker (with the real exit code) appears.
+    struct TabExec {
+        QTcpSocket *socket = nullptr;
+        int tabIndex = -1;
+        QString token;
+        QString command;
+        QString echoStrip; // last non-empty command line (echo removal)
+        QString detail;
+        QString target;    // user@host:port for the response
+        bool polluted = false; // previous exec on this tab timed out
+        qint64 deadlineMs = 0; // 0 = no limit
+        QTimer *timer = nullptr;
+    };
+
     QTcpServer *server = nullptr;
     QHash<QTcpSocket *, QByteArray> buffers;
     QHash<QString, PendingOp> pendingOps; // requestId -> in-flight operation
+    QHash<QString, TabTransfer> tabTransfers; // requestId -> tab transfer
+    QHash<QString, TabExec> tabExecs; // requestId -> visible exec
+    QSet<int> tabExecBusy; // tab indices with a running visible exec
+    // Tabs whose last exec ended on timeout: the command kept running and
+    // its late output can pollute the NEXT exec's capture (the 2026-09-11
+    // "FW_OK 假成功"). The next exec on such a tab gets a warning field.
+    QSet<int> tabExecPolluted;
     AgentTabsInterface *tabs = nullptr;   // GUI tabs provider (GUI mode only)
     int listenPort = 8222;
     QString error;
@@ -49,10 +247,6 @@ AgentHttpServer::AgentHttpServer(QObject *parent)
     : QObject(parent)
     , d(std::make_unique<Impl>())
 {
-    connect(&d->registry, &AgentSessionRegistry::execFinished,
-            this, &AgentHttpServer::onExecFinished);
-    connect(&d->registry, &AgentSessionRegistry::transferFinished,
-            this, &AgentHttpServer::onTransferFinished);
 }
 
 AgentHttpServer::~AgentHttpServer()
@@ -75,6 +269,16 @@ bool AgentHttpServer::start(int port)
     d->server = server;
     d->listenPort = server->serverPort();
     connect(server, &QTcpServer::newConnection, this, &AgentHttpServer::onNewConnection);
+    // Accept errors used to be silent — the agent looked alive but answered
+    // nothing (the 2026-09-11 "Agent 无声消失"). Surface them instead.
+    connect(server, &QTcpServer::acceptError, this, [this](QAbstractSocket::SocketError) {
+        const QString message = d->server ? d->server->errorString()
+                                          : QStringLiteral("unknown accept error");
+        AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("agent"),
+                        QStringLiteral("port=%1").arg(d->listenPort),
+                        QStringLiteral("accept error: %1").arg(message));
+        emit acceptErrorOccurred(message);
+    });
     return true;
 }
 
@@ -89,10 +293,17 @@ void AgentHttpServer::stop()
     }
     d->buffers.clear();
     d->pendingOps.clear();
+    for (auto it = d->tabExecs.begin(); it != d->tabExecs.end(); ++it) {
+        if (it.value().timer) {
+            it.value().timer->stop();
+            it.value().timer->deleteLater();
+        }
+    }
+    d->tabExecs.clear();
+    d->tabExecBusy.clear();
     d->server->close();
     d->server->deleteLater();
     d->server = nullptr;
-    d->registry.closeAll();
 }
 
 bool AgentHttpServer::isRunning() const
@@ -113,11 +324,6 @@ QString AgentHttpServer::url() const
 QString AgentHttpServer::errorString() const
 {
     return d->error;
-}
-
-AgentSessionRegistry *AgentHttpServer::registry() const
-{
-    return &d->registry;
 }
 
 void AgentHttpServer::setTabsInterface(AgentTabsInterface *tabs)
@@ -185,6 +391,26 @@ QJsonObject jsonError(const QString &message)
     return object;
 }
 
+// Parses a JSON request body. A body that is not valid UTF-8 JSON (classic
+// case: PowerShell 5.1 posting Chinese text without an explicit charset —
+// the bytes are GBK) used to yield an EMPTY object, so a stored-session
+// lookup surfaced as a misleading 404 "not found". Fail fast with guidance.
+bool parseJsonBody(const QByteArray &body, QJsonObject *object, QString *error)
+{
+    QJsonParseError parseError{};
+    const QJsonDocument doc = QJsonDocument::fromJson(body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        *error = QStringLiteral("Invalid JSON body (%1). Send UTF-8 JSON with "
+                                "Content-Type: application/json; charset=utf-8")
+                     .arg(parseError.error != QJsonParseError::NoError
+                              ? parseError.errorString()
+                              : QStringLiteral("not a JSON object"));
+        return false;
+    }
+    *object = doc.object();
+    return true;
+}
+
 } // namespace
 
 void AgentHttpServer::onNewConnection()
@@ -197,6 +423,17 @@ void AgentHttpServer::onNewConnection()
             d->buffers.remove(socket);
             for (auto it = d->pendingOps.begin(); it != d->pendingOps.end();) {
                 if (it.value().socket == socket) {
+                    // The client is gone (typically a client-side timeout):
+                    // cancel the server-side work too.
+                    if (it.value().action == QLatin1String("tab_exec")) {
+                        finishTabExec(it.key());
+                    } else if (it.value().action.startsWith(QLatin1String("tab_"))) {
+                        // Tab transfer: cancel its dedicated session.
+                        auto tt = d->tabTransfers.constFind(it.key());
+                        if (tt != d->tabTransfers.constEnd() && tt.value().worker) {
+                            tt.value().worker->cancelTransfer();
+                        }
+                    }
                     it = d->pendingOps.erase(it);
                 } else {
                     ++it;
@@ -220,7 +457,7 @@ void AgentHttpServer::onReadyRead(QTcpSocket *socket)
     handleRequest(socket, request);
 }
 
-void AgentHttpServer::handleRequest(QTcpSocket *socket, const HttpRequest &request)
+void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
 {
     const QByteArray token = Config::instance().stringValue(QStringLiteral("agent/token")).toUtf8();
     if (!token.isEmpty()) {
@@ -230,6 +467,15 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, const HttpRequest &reque
             respondError(socket, 401, "Unauthorized");
             return;
         }
+    }
+
+    // /api/v2/ mirrors /api/v1/, but bare top-level JSON arrays come wrapped
+    // in an object: PowerShell 5.1 mangles bare arrays on deserialization
+    // ($arr.id joins all ids into one space-separated string).
+    bool wrapArrays = false;
+    if (request.path.startsWith(QStringLiteral("/api/v2/"))) {
+        wrapArrays = true;
+        request.path = QStringLiteral("/api/v1/") + request.path.mid(8);
     }
 
     const QByteArray &method = request.method;
@@ -253,200 +499,21 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, const HttpRequest &reque
         body[QStringLiteral("status")] = QStringLiteral("ok");
         body[QStringLiteral("name")] = QStringLiteral("hssh");
         body[QStringLiteral("version")] = QStringLiteral(HSSH_VERSION_STRING);
-        body[QStringLiteral("sessions")] = QJsonArray::fromVariantList(d->registry.listSessions());
+        body[QStringLiteral("pid")] = QCoreApplication::applicationPid();
+        body[QStringLiteral("tabs")] = d->tabs ? d->tabs->listTabs().size() : 0;
         respond(socket, 200, QJsonDocument(body).toJson(QJsonDocument::Compact));
         return;
     }
 
-    if (method == "GET" && request.path == "/api/v1/sessions") {
-        QJsonArray array = QJsonArray::fromVariantList(d->registry.listSessions());
-        respond(socket, 200, QJsonDocument(array).toJson(QJsonDocument::Compact));
-        return;
-    }
-
-    if (method == "POST" && request.path == "/api/v1/sessions") {
-        const QJsonObject body = QJsonDocument::fromJson(request.body).object();
-
-        // Stored-session reference: credentials never cross the API.
-        QString sessionRef = body.value(QStringLiteral("sessionName")).toString();
-        if (sessionRef.isEmpty()) {
-            sessionRef = body.value(QStringLiteral("sessionId")).toString();
-        }
-        if (!sessionRef.isEmpty()) {
-            const QString id = d->registry.createSessionFromStored(sessionRef);
-            if (id.isEmpty()) {
-                AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("connect"),
-                                QStringLiteral("stored=%1").arg(sessionRef),
-                                QStringLiteral("error: %1").arg(d->registry.lastError()));
-                respondError(socket, 404, d->registry.lastError());
-                return;
-            }
-            AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("connect"),
-                            QStringLiteral("stored=%1").arg(sessionRef),
-                            QStringLiteral("pending id=%1").arg(id));
-            QJsonObject result;
-            result[QStringLiteral("sessionId")] = id;
-            respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
-            return;
-        }
-
-        // Plaintext passwords are rejected by policy.
-        if (body.contains(QStringLiteral("password"))) {
-            AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("connect"),
-                            QStringLiteral("host=%1").arg(body.value(QStringLiteral("host")).toString()),
-                            QStringLiteral("rejected: plaintext password"));
-            respondError(socket, 400,
-                         "Plaintext password rejected; use passwordCipher or sessionName");
-            return;
-        }
-
-        SessionConfig config;
-        config.setName(body.value(QStringLiteral("name")).toString());
-        config.setHost(body.value(QStringLiteral("host")).toString());
-        config.setPort(body.value(QStringLiteral("port")).toInt(22));
-        config.setUsername(body.value(QStringLiteral("username")).toString());
-
-        const QString authMethod = body.value(QStringLiteral("authMethod")).toString();
-        if (authMethod == QLatin1String("publickey")) {
-            config.setAuthMethod(AuthMethod::PublicKey);
-            config.setPrivateKeyPath(body.value(QStringLiteral("privateKeyPath")).toString());
-            const QString cipher = body.value(QStringLiteral("keyPassphraseCipher")).toString();
-            if (!cipher.isEmpty()) {
-                bool ok = false;
-                const QByteArray plain = Crypto::rsaDecrypt(cipher.toUtf8(), &ok);
-                if (!ok) {
-                    respondError(socket, 400, "Failed to decrypt keyPassphraseCipher (locked or bad cipher)");
-                    return;
-                }
-                config.setKeyPassphrase(SecureString(plain));
-            }
-        } else if (authMethod == QLatin1String("agent")) {
-            config.setAuthMethod(AuthMethod::Agent);
-        } else if (authMethod == QLatin1String("keyboard-interactive")) {
-            config.setAuthMethod(AuthMethod::KeyboardInteractive);
-        } else {
-            config.setAuthMethod(AuthMethod::Password);
-        }
-
-        // Password is optional: key/agent auth needs none.
-        const QString cipher = body.value(QStringLiteral("passwordCipher")).toString();
-        if (!cipher.isEmpty()) {
-            bool ok = false;
-            const QByteArray plain = Crypto::rsaDecrypt(cipher.toUtf8(), &ok);
-            if (!ok) {
-                respondError(socket, 400, "Failed to decrypt passwordCipher (locked or bad cipher)");
-                return;
-            }
-            config.setPassword(SecureString(plain));
-        }
-
-        const QString id = d->registry.createSession(config);
-        if (id.isEmpty()) {
-            AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("connect"),
-                            QStringLiteral("host=%1 user=%2").arg(config.host(), config.username()),
-                            QStringLiteral("error: %1").arg(d->registry.lastError()));
-            respondError(socket, 400, d->registry.lastError());
-            return;
-        }
-
-        AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("connect"),
-                        QStringLiteral("host=%1 user=%2 auth=%3 cipher=%4")
-                            .arg(config.host(), config.username())
-                            .arg(static_cast<int>(config.authMethod()))
-                            .arg(cipher.isEmpty() ? QStringLiteral("none")
-                                                  : QStringLiteral("<cipher %1 bytes>").arg(cipher.size())),
-                        QStringLiteral("pending id=%1").arg(id));
-        QJsonObject result;
-        result[QStringLiteral("sessionId")] = id;
-        respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
-        return;
-    }
-
-    if (method == "DELETE" && request.path.startsWith(QStringLiteral("/api/v1/sessions/"))) {
-        const QString id = request.path.mid(QStringLiteral("/api/v1/sessions/").size());
-        if (id.isEmpty() || !d->registry.closeSession(id)) {
-            respondError(socket, 404, "Unknown session: " + id);
-            return;
-        }
-        AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("disconnect"),
-                        QStringLiteral("session=%1").arg(id), QStringLiteral("ok"));
-        QJsonObject result;
-        result[QStringLiteral("ok")] = true;
-        respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
-        return;
-    }
-
-    if (method == "POST" && request.path.startsWith(QStringLiteral("/api/v1/sessions/"))
-        && request.path.endsWith(QStringLiteral("/exec"))) {
-        const QString prefix = QStringLiteral("/api/v1/sessions/");
-        const QString suffix = QStringLiteral("/exec");
-        const QString id = request.path.mid(prefix.size(), request.path.size() - prefix.size() - suffix.size());
-        if (id.isEmpty() || !d->registry.hasSession(id)) {
-            respondError(socket, 404, "Unknown session: " + id);
-            return;
-        }
-        const QJsonObject body = QJsonDocument::fromJson(request.body).object();
-        const QString command = body.value(QStringLiteral("command")).toString();
-        if (command.isEmpty()) {
-            respondError(socket, 400, "Missing command");
-            return;
-        }
-
-        const QString requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-        Impl::PendingOp op;
-        op.socket = socket;
-        op.action = QStringLiteral("exec");
-        op.sessionId = id;
-        op.detail = QStringLiteral("cmd=\"%1\"").arg(command);
-        d->pendingOps[requestId] = op;
-
-        if (!d->registry.exec(id, requestId, command)) {
-            d->pendingOps.remove(requestId);
-            AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("exec"),
-                            QStringLiteral("session=%1 cmd=\"%2\"").arg(id, command),
-                            QStringLiteral("error: %1").arg(d->registry.lastError()));
-            respondError(socket, 500, d->registry.lastError());
-        }
-        return;
-    }
-
-    if (method == "POST"
-        && (request.path.endsWith(QStringLiteral("/upload")) || request.path.endsWith(QStringLiteral("/download")))) {
-        const QString prefix = QStringLiteral("/api/v1/sessions/");
-        const bool isUpload = request.path.endsWith(QStringLiteral("/upload"));
-        const QString suffix = isUpload ? QStringLiteral("/upload") : QStringLiteral("/download");
-        const QString id = request.path.mid(prefix.size(), request.path.size() - prefix.size() - suffix.size());
-        if (id.isEmpty() || !d->registry.hasSession(id)) {
-            respondError(socket, 404, "Unknown session: " + id);
-            return;
-        }
-        const QJsonObject body = QJsonDocument::fromJson(request.body).object();
-        const QString localPath = body.value(QStringLiteral("localPath")).toString();
-        const QString remotePath = body.value(QStringLiteral("remotePath")).toString();
-        if (localPath.isEmpty() || remotePath.isEmpty()) {
-            respondError(socket, 400, "localPath and remotePath are required");
-            return;
-        }
-
-        const QString requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-        Impl::PendingOp op;
-        op.socket = socket;
-        op.action = isUpload ? QStringLiteral("upload") : QStringLiteral("download");
-        op.sessionId = id;
-        op.detail = isUpload ? QStringLiteral("local=%1 remote=%2").arg(localPath, remotePath)
-                             : QStringLiteral("remote=%1 local=%2").arg(remotePath, localPath);
-        d->pendingOps[requestId] = op;
-
-        const bool ok = isUpload
-            ? d->registry.upload(id, requestId, localPath, remotePath)
-            : d->registry.download(id, requestId, remotePath, localPath);
-        if (!ok) {
-            d->pendingOps.remove(requestId);
-            AgentAudit::log(AgentAudit::Source::Rest, op.action,
-                            QStringLiteral("session=%1 %2").arg(id, op.detail),
-                            QStringLiteral("error: %1").arg(d->registry.lastError()));
-            respondError(socket, 500, d->registry.lastError());
-        }
+    // Liveness + quick facts for diagnosing "is the agent alive?".
+    if (method == "GET" && request.path == QStringLiteral("/api/v1/health")) {
+        QJsonObject body;
+        body[QStringLiteral("ok")] = true;
+        body[QStringLiteral("pid")] = QCoreApplication::applicationPid();
+        body[QStringLiteral("version")] = QStringLiteral(HSSH_VERSION_STRING);
+        body[QStringLiteral("pendingOps")] = d->pendingOps.size();
+        body[QStringLiteral("tabs")] = d->tabs ? d->tabs->listTabs().size() : 0;
+        respond(socket, 200, QJsonDocument(body).toJson(QJsonDocument::Compact));
         return;
     }
 
@@ -456,7 +523,33 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, const HttpRequest &reque
             respondError(socket, 501, "GUI tabs are only available in the GUI agent");
             return;
         }
-        respond(socket, 200, QJsonDocument(QJsonArray::fromVariantList(d->tabs->listTabs())).toJson(QJsonDocument::Compact));
+        QVariantList tabsList = d->tabs->listTabs();
+        annotateTabRefs(tabsList, d->tabs->listSavedSessions());
+        const QJsonArray array = QJsonArray::fromVariantList(tabsList);
+        if (wrapArrays) {
+            QJsonObject body;
+            body[QStringLiteral("tabs")] = array;
+            respond(socket, 200, QJsonDocument(body).toJson(QJsonDocument::Compact));
+            return;
+        }
+        respond(socket, 200, QJsonDocument(array).toJson(QJsonDocument::Compact));
+        return;
+    }
+
+    // Saved sessions from the repository (names/hosts only, no secrets).
+    if (method == "GET" && request.path == QStringLiteral("/api/v1/saved-sessions")) {
+        if (!d->tabs) {
+            respondError(socket, 501, "Saved sessions are only available in the GUI agent");
+            return;
+        }
+        const QJsonArray array = QJsonArray::fromVariantList(d->tabs->listSavedSessions());
+        if (wrapArrays) {
+            QJsonObject body;
+            body[QStringLiteral("savedSessions")] = array;
+            respond(socket, 200, QJsonDocument(body).toJson(QJsonDocument::Compact));
+            return;
+        }
+        respond(socket, 200, QJsonDocument(array).toJson(QJsonDocument::Compact));
         return;
     }
 
@@ -465,31 +558,109 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, const HttpRequest &reque
             respondError(socket, 501, "GUI tabs are only available in the GUI agent");
             return;
         }
-        const QJsonObject body = QJsonDocument::fromJson(request.body).object();
+        QJsonObject body;
+        QString bodyError;
+        if (!parseJsonBody(request.body, &body, &bodyError)) {
+            respondError(socket, 400, bodyError);
+            return;
+        }
         const QString sessionName = body.value(QStringLiteral("session")).toString();
         int index = -1;
+        QString auditTarget;
         if (!sessionName.isEmpty()) {
             index = d->tabs->openSessionTab(sessionName);
+            auditTarget = QStringLiteral("session=%1").arg(sessionName);
+        } else if (body.contains(QStringLiteral("host"))) {
+            // Ad-hoc SSH tab: plaintext passwords are rejected by policy;
+            // ciphers are decrypted here so plaintext never crosses the API.
+            for (const char *key : {"passwordCipher", "keyPassphraseCipher"}) {
+                if (body.contains(QLatin1String(key))
+                    && body.value(QLatin1String(key)).toString().isEmpty()) {
+                    respondError(socket, 400,
+                                 QStringLiteral("%1 is null/empty; omit the field or provide a cipher")
+                                     .arg(QLatin1String(key)));
+                    return;
+                }
+            }
+            if (body.contains(QStringLiteral("password"))) {
+                respondError(socket, 400,
+                             "Plaintext password rejected; use passwordCipher or a saved session");
+                return;
+            }
+            SessionConfig config;
+            config.setName(body.value(QStringLiteral("name")).toString());
+            config.setHost(body.value(QStringLiteral("host")).toString());
+            config.setPort(body.value(QStringLiteral("port")).toInt(22));
+            config.setUsername(body.value(QStringLiteral("username")).toString());
+            config.setSessionType(SessionType::Ssh);
+            const QString authMethod = body.value(QStringLiteral("authMethod")).toString();
+            if (authMethod == QLatin1String("publickey")) {
+                config.setAuthMethod(AuthMethod::PublicKey);
+                config.setPrivateKeyPath(body.value(QStringLiteral("privateKeyPath")).toString());
+                const QString cipher = body.value(QStringLiteral("keyPassphraseCipher")).toString();
+                if (!cipher.isEmpty()) {
+                    bool ok = false;
+                    const QByteArray plain = Crypto::rsaDecrypt(cipher.toUtf8(), &ok);
+                    if (!ok) {
+                        respondError(socket, 400, "Failed to decrypt keyPassphraseCipher (locked or bad cipher)");
+                        return;
+                    }
+                    config.setKeyPassphrase(SecureString(plain));
+                }
+            } else if (authMethod == QLatin1String("agent")) {
+                config.setAuthMethod(AuthMethod::Agent);
+            } else if (authMethod == QLatin1String("keyboard-interactive")) {
+                config.setAuthMethod(AuthMethod::KeyboardInteractive);
+            } else {
+                config.setAuthMethod(AuthMethod::Password);
+            }
+            const QString cipher = body.value(QStringLiteral("passwordCipher")).toString();
+            if (!cipher.isEmpty()) {
+                bool ok = false;
+                const QByteArray plain = Crypto::rsaDecrypt(cipher.toUtf8(), &ok);
+                if (!ok) {
+                    respondError(socket, 400, "Failed to decrypt passwordCipher (locked or bad cipher)");
+                    return;
+                }
+                config.setPassword(SecureString(plain));
+            }
+            auditTarget = QStringLiteral("host=%1 user=%2").arg(config.host(), config.username());
+            index = d->tabs->openSshTab(config);
         } else {
             const QString shellType = body.value(QStringLiteral("shellType")).toString();
             index = d->tabs->openLocalTab(shellType);
+            auditTarget = QStringLiteral("local");
         }
         if (index < 0) {
             AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("tab_open"),
-                            sessionName.isEmpty() ? QStringLiteral("local")
-                                                  : QStringLiteral("session=%1").arg(sessionName),
-                            QStringLiteral("error: not found"));
-            respondError(socket, 404, sessionName.isEmpty()
+                            auditTarget, QStringLiteral("error: not found"));
+            respondError(socket, 404, sessionName.isEmpty() && !body.contains(QStringLiteral("host"))
                                            ? "Failed to open a local terminal tab"
-                                           : "Session not found: " + sessionName);
+                                           : "Session not found or invalid: " + auditTarget);
             return;
         }
         AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("tab_open"),
-                        sessionName.isEmpty() ? QStringLiteral("local")
-                                              : QStringLiteral("session=%1").arg(sessionName),
-                        QStringLiteral("ok index=%1").arg(index));
+                        auditTarget, QStringLiteral("ok index=%1").arg(index));
         QJsonObject result;
         result[QStringLiteral("index")] = index;
+        QVariantList tabsList = d->tabs->listTabs();
+        annotateTabRefs(tabsList, d->tabs->listSavedSessions());
+        for (const QVariant &v : tabsList) {
+            const QVariantMap m = v.toMap();
+            if (m.value(QStringLiteral("index")).toInt() == index) {
+                result[QStringLiteral("name")] = m.value(QStringLiteral("name")).toString();
+                result[QStringLiteral("ref")] = m.value(QStringLiteral("ref")).toString();
+                result[QStringLiteral("target")] = m.value(QStringLiteral("target")).toString();
+                // Surface a stale tab immediately at open time: the caller
+                // asked for a session whose endpoint changed since.
+                if (m.value(QStringLiteral("stale")).toBool()) {
+                    result[QStringLiteral("stale")] = true;
+                    result[QStringLiteral("savedTarget")] =
+                        m.value(QStringLiteral("savedTarget")).toString();
+                }
+                break;
+            }
+        }
         respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
         return;
     }
@@ -504,10 +675,17 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, const HttpRequest &reque
         const int slash = rest.indexOf(QLatin1Char('/'));
         const QString indexText = slash < 0 ? rest : rest.left(slash);
         const QString sub = slash < 0 ? QString() : rest.mid(slash + 1);
-        bool indexOk = false;
-        const int index = indexText.toInt(&indexOk);
-        if (!indexOk) {
-            respondError(socket, 400, "Invalid tab index: " + indexText);
+        if (indexText.isEmpty()) {
+            respondError(socket, 400, "Missing tab reference");
+            return;
+        }
+        // Name-based refs ("<name>" or "<name>:<ordinal>") are resolved
+        // against the live tab list; plain integers keep the legacy
+        // positional meaning.
+        QString refError;
+        const int index = resolveTabRef(d->tabs->listTabs(), indexText, &refError);
+        if (index < 0) {
+            respondError(socket, 404, refError);
             return;
         }
 
@@ -537,7 +715,31 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, const HttpRequest &reque
         }
 
         if (method == "POST" && sub == QStringLiteral("send")) {
-            const QJsonObject body = QJsonDocument::fromJson(request.body).object();
+            QJsonObject body;
+            QString bodyError;
+            if (!parseJsonBody(request.body, &body, &bodyError)) {
+                respondError(socket, 400, bodyError);
+                return;
+            }
+            // Raw input mode: {"data":"..."} sends the bytes verbatim (no
+            // auto-Enter) 鈥?use it for control characters like Ctrl+C
+            // ("\u0003") and Ctrl+D ("\u0004"). {"command":"..."} keeps
+            // the old "type command + Enter" semantic.
+            const QString data = body.value(QStringLiteral("data")).toString();
+            if (!data.isEmpty()) {
+                if (!d->tabs->sendInputToTab(index, data)) {
+                    respondError(socket, 404, "Unknown tab index: " + indexText);
+                    return;
+                }
+                // Never log raw input: it may carry secrets or control bytes.
+                AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("tab_input"),
+                                QStringLiteral("tab=%1 <raw %2 bytes>").arg(index).arg(data.toUtf8().size()),
+                                QStringLiteral("ok"));
+                QJsonObject result;
+                result[QStringLiteral("ok")] = true;
+                respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+                return;
+            }
             const QString command = body.value(QStringLiteral("command")).toString();
             if (command.isEmpty()) {
                 respondError(socket, 400, "Missing command");
@@ -557,7 +759,12 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, const HttpRequest &reque
         }
 
         if (method == "POST" && sub == QStringLiteral("secure-input")) {
-            const QJsonObject body = QJsonDocument::fromJson(request.body).object();
+            QJsonObject body;
+            QString bodyError;
+            if (!parseJsonBody(request.body, &body, &bodyError)) {
+                respondError(socket, 400, bodyError);
+                return;
+            }
             const QString cipher = body.value(QStringLiteral("cipher")).toString();
             if (cipher.isEmpty()) {
                 respondError(socket, 400, "Missing cipher");
@@ -588,20 +795,119 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, const HttpRequest &reque
             return;
         }
 
+        // File transfer for an SSH tab over a DEDICATED connection (never
+        // shares the terminal's ssh_session: libssh sessions are not
+        // thread-safe). `method`: "sftp" (default), "scp" (remote scp
+        // binary), "shell" (base64 over an exec channel — works without
+        // sftp-server), "auto" (sftp -> scp -> shell while zero bytes have
+        // moved). Uploads and downloads verify content (md5) by default.
+        if (method == "POST"
+            && (sub == QStringLiteral("upload") || sub == QStringLiteral("download"))) {
+            const bool isUpload = sub == QStringLiteral("upload");
+            QJsonObject body;
+            QString bodyError;
+            if (!parseJsonBody(request.body, &body, &bodyError)) {
+                respondError(socket, 400, bodyError);
+                return;
+            }
+            const QString localPath = body.value(QStringLiteral("localPath")).toString();
+            const QString remotePath = body.value(QStringLiteral("remotePath")).toString();
+            if (localPath.isEmpty() || remotePath.isEmpty()) {
+                respondError(socket, 400, "localPath and remotePath are required");
+                return;
+            }
+            const QString transferMethod = body.value(QStringLiteral("method"))
+                                               .toString(QStringLiteral("sftp"))
+                                               .toLower();
+            if (transferMethod != QLatin1String("sftp")
+                && transferMethod != QLatin1String("scp")
+                && transferMethod != QLatin1String("shell")
+                && transferMethod != QLatin1String("auto")) {
+                respondError(socket, 400, "Unknown transfer method: " + transferMethod
+                                          + " (expected sftp, scp, shell or auto)");
+                return;
+            }
+            const SessionConfig config = d->tabs->sessionConfigForTab(index);
+            if (config.sessionType() != SessionType::Ssh || config.host().isEmpty()) {
+                respondError(socket, 400, "Tab is not an SSH session: " + indexText);
+                return;
+            }
+            for (auto it = d->tabTransfers.cbegin(); it != d->tabTransfers.cend(); ++it) {
+                if (it.value().tabIndex == index) {
+                    respondError(socket, 409, "Another transfer is running on this tab");
+                    return;
+                }
+            }
+
+            QStringList chain;
+            if (transferMethod == QLatin1String("auto")) {
+                chain = {QStringLiteral("sftp"), QStringLiteral("scp"), QStringLiteral("shell")};
+            } else {
+                chain = {transferMethod};
+            }
+
+            const QString requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            Impl::PendingOp op;
+            op.socket = socket;
+            op.action = isUpload ? QStringLiteral("tab_upload") : QStringLiteral("tab_download");
+            op.sessionId = QStringLiteral("tab:%1").arg(index);
+            op.detail = isUpload
+                ? QStringLiteral("tab=%1 method=%2 local=%3 remote=%4")
+                      .arg(index).arg(chain.first()).arg(localPath, remotePath)
+                : QStringLiteral("tab=%1 method=%2 remote=%3 local=%4")
+                      .arg(index).arg(chain.first()).arg(remotePath, localPath);
+            op.startedMs = QDateTime::currentMSecsSinceEpoch();
+            d->pendingOps[requestId] = op;
+
+            Impl::TabTransfer transfer;
+            transfer.tabIndex = index;
+            transfer.config = config;
+            transfer.isUpload = isUpload;
+            transfer.localPath = localPath;
+            transfer.remotePath = remotePath;
+            transfer.verify = body.value(QStringLiteral("verify")).toBool(true);
+            transfer.remainingMethods = chain.mid(1);
+            d->tabTransfers[requestId] = transfer;
+            startTabTransferWorker(requestId, chain.first());
+            return;
+        }
+
         if (method == "POST" && sub == QStringLiteral("sudo")) {
-            const QJsonObject body = QJsonDocument::fromJson(request.body).object();
+            QJsonObject body;
+            QString bodyError;
+            if (!parseJsonBody(request.body, &body, &bodyError)) {
+                respondError(socket, 400, bodyError);
+                return;
+            }
             const QString command = body.value(QStringLiteral("command")).toString();
             if (command.isEmpty()) {
                 respondError(socket, 400, "Missing command");
                 return;
             }
 
-            // User confirmation gate (per-tab, once per tab lifetime).
-            if (!d->tabs->confirmSudo(index, command)) {
+            // User confirmation gate (per-tab, once per tab lifetime). The
+            // reason code matters: a bare "User rejected" used to also cover
+            // drifted indices and unanswered (invisible) dialogs, so callers
+            // could not tell a denial from a popup nobody ever saw.
+            QString reason;
+            if (!d->tabs->confirmSudo(index, command, &reason)) {
                 AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("sudo"),
                                 QStringLiteral("tab=%1 cmd=\"%2\"").arg(index).arg(command),
-                                QStringLiteral("rejected"));
-                respondError(socket, 403, "User rejected the sudo request");
+                                QStringLiteral("rejected: %1").arg(reason));
+                if (reason == QLatin1String("unknown_tab")) {
+                    respondError(socket, 404, "Unknown tab (index may have drifted; use the "
+                                              "drift-safe ref from GET /api/v1/tabs): " + indexText);
+                    return;
+                }
+                QJsonObject result;
+                result[QStringLiteral("error")] =
+                    reason == QLatin1String("timeout")
+                        ? QStringLiteral("Sudo confirmation timed out after 30 s: the dialog was "
+                                         "not answered (it may be hidden or on another desktop). "
+                                         "Retry; check the hssh window/taskbar.")
+                        : QStringLiteral("User rejected the sudo request");
+                result[QStringLiteral("reason")] = reason;
+                respond(socket, 403, QJsonDocument(result).toJson(QJsonDocument::Compact));
                 return;
             }
 
@@ -617,14 +923,18 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, const HttpRequest &reque
                 }
                 secret = QString::fromUtf8(plain);
             }
-            const bool useStored = body.value(QStringLiteral("useStoredCredential")).toBool();
+            // Stored credential is the default for tabs opened from a saved
+            // session (the user confirmation popup is the consent gate);
+            // pass useStoredCredential:false explicitly to opt out.
+            const bool useStored = body.value(QStringLiteral("useStoredCredential")).toBool(true);
             const int timeoutMs = body.value(QStringLiteral("timeout")).toInt(60000);
 
             QString output;
             QString errorMessage;
             bool timedOut = false;
+            int exitCode = -1;
             const bool ok = d->tabs->sudoExec(index, command, secret, useStored, timeoutMs,
-                                               &output, &timedOut, &errorMessage);
+                                               &output, &timedOut, &exitCode, &errorMessage);
             secret.fill(QLatin1Char('\0'));
             if (!ok) {
                 AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("sudo"),
@@ -646,6 +956,100 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, const HttpRequest &reque
             QJsonObject result;
             result[QStringLiteral("output")] = output;
             result[QStringLiteral("timedOut")] = timedOut;
+            // executed=false means the completion sentinel never appeared:
+            // the command was NOT confirmed to have run (popup delayed/
+            // rejected downstream, busy terminal, wedged sudo prompt). Always
+            // verify executed + exitCode before trusting a sudo result.
+            result[QStringLiteral("executed")] = !timedOut;
+            result[QStringLiteral("exitCode")] = exitCode;
+            const QString sudoTarget = tabTarget(index);
+            if (!sudoTarget.isEmpty()) {
+                result[QStringLiteral("target")] = sudoTarget;
+            }
+            respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+            return;
+        }
+
+        // Visible exec: types the command into the terminal bracketed by
+        // unique begin/end markers, then polls the buffer until the end
+        // marker (carrying the real exit code) appears. The user watches
+        // the command run in the tab. One exec per tab at a time; the tab
+        // must sit at a shell prompt (input goes to the foreground program).
+        // Options: timeout (ms, default 120 s, 0 = no limit), reset (send
+        // Ctrl+C first and wait 400 ms — clears a stuck continuation prompt
+        // or half-typed line; the foreground program is interrupted).
+        if (method == "POST" && sub == QStringLiteral("exec")) {
+            QJsonObject body;
+            QString bodyError;
+            if (!parseJsonBody(request.body, &body, &bodyError)) {
+                respondError(socket, 400, bodyError);
+                return;
+            }
+            const QString command = body.value(QStringLiteral("command")).toString();
+            if (command.isEmpty()) {
+                respondError(socket, 400, "Missing command");
+                return;
+            }
+            if (d->tabExecBusy.contains(index)) {
+                respondError(socket, 409, "Another exec is running on this tab");
+                return;
+            }
+            // timeout in ms; default 120 s; explicit 0 disables the limit.
+            const int timeoutMs = body.contains(QStringLiteral("timeout"))
+                                      ? body.value(QStringLiteral("timeout")).toInt(0)
+                                      : 120000;
+            const bool reset = body.value(QStringLiteral("reset")).toBool(false);
+
+            const QString requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            Impl::PendingOp op;
+            op.socket = socket;
+            op.action = QStringLiteral("tab_exec");
+            op.detail = QStringLiteral("tab=%1 cmd=\"%2\"").arg(index).arg(command);
+            op.startedMs = QDateTime::currentMSecsSinceEpoch();
+            d->pendingOps[requestId] = op;
+
+            Impl::TabExec exec;
+            exec.socket = socket;
+            exec.tabIndex = index;
+            exec.command = command;
+            exec.target = tabTarget(index);
+            // A previous timed-out exec on this tab may still be running:
+            // flag the pollution risk on THIS response, then clear.
+            exec.polluted = d->tabExecPolluted.contains(index);
+            d->tabExecPolluted.remove(index);
+            exec.detail = op.detail;
+            exec.deadlineMs = timeoutMs > 0
+                ? QDateTime::currentMSecsSinceEpoch() + timeoutMs : 0;
+            d->tabExecs[requestId] = exec;
+            d->tabExecBusy.insert(index);
+
+            if (reset) {
+                // Clear a stuck continuation prompt / half-typed line first;
+                // the marker sequence is typed once the shell recovered.
+                d->tabs->sendInputToTab(index, QStringLiteral("\u0003"));
+                QTimer::singleShot(400, this, [this, requestId]() {
+                    beginTabExec(requestId);
+                });
+            } else {
+                beginTabExec(requestId);
+            }
+
+            AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("tab_exec"),
+                            op.detail, QStringLiteral("invoked"));
+            return;
+        }
+
+        // Reconnect a disconnected SSH tab (Enter-to-reconnect equivalent).
+        if (method == "POST" && sub == QStringLiteral("reconnect")) {
+            if (!d->tabs->reconnectTab(index)) {
+                respondError(socket, 400, "Tab is not a disconnected SSH tab: " + indexText);
+                return;
+            }
+            AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("tab_reconnect"),
+                            QStringLiteral("tab=%1").arg(index), QStringLiteral("invoked"));
+            QJsonObject result;
+            result[QStringLiteral("ok")] = true;
+            result[QStringLiteral("target")] = tabTarget(index);
             respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
             return;
         }
@@ -670,57 +1074,370 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, const HttpRequest &reque
     respondError(socket, 404, "Not found: " + request.path.toUtf8());
 }
 
-void AgentHttpServer::onExecFinished(const QString &sessionId, const QString &requestId,
-                                     const QString &output, int exitCode, const QString &error)
+
+// Creates the transfer worker for `method` and starts it. The request's
+// TabTransfer bookkeeping (paths, verify, fallback chain) must already be
+// in d->tabTransfers.
+void AgentHttpServer::startTabTransferWorker(const QString &requestId, const QString &method)
 {
-    const auto it = d->pendingOps.find(requestId);
-    if (it == d->pendingOps.end()) {
+    auto it = d->tabTransfers.find(requestId);
+    if (it == d->tabTransfers.end()) {
         return;
     }
-    const Impl::PendingOp op = it.value();
-    d->pendingOps.erase(it);
-    QTcpSocket *socket = op.socket;
+    Impl::TabTransfer &transfer = it.value();
 
-    AgentAudit::log(AgentAudit::Source::Rest, op.action,
-                    QStringLiteral("session=%1 %2").arg(sessionId, op.detail),
-                    error.isEmpty() ? QStringLiteral("ok exit=%1").arg(exitCode)
-                                    : QStringLiteral("error: %1").arg(error));
-
-    if (!error.isEmpty()) {
-        respondError(socket, 500, error);
-        return;
+    TransferSession *worker = nullptr;
+    if (method == QLatin1String("scp")) {
+        worker = new ChannelCopySession(transfer.config, ChannelCopySession::Mode::Scp, this);
+    } else if (method == QLatin1String("shell")) {
+        worker = new ChannelCopySession(transfer.config, ChannelCopySession::Mode::Base64, this);
+    } else {
+        worker = new SftpSession(transfer.config, this);
     }
-    QJsonObject result;
-    result[QStringLiteral("sessionId")] = sessionId;
-    result[QStringLiteral("output")] = output;
-    result[QStringLiteral("exitCode")] = exitCode;
-    respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+    transfer.worker = worker;
+
+    // Keep the audit detail in sync with the method actually running
+    // (fallbacks rewrite it).
+    auto opIt = d->pendingOps.find(requestId);
+    if (opIt != d->pendingOps.end()) {
+        static const QRegularExpression methodRe(QStringLiteral("method=\\S+"));
+        opIt.value().detail.replace(methodRe, QStringLiteral("method=") + method);
+    }
+
+    // NB: when the initial connect fails, errorOccurred fires AND the queued
+    // transfer then fails with transferFinished — the first signal wins; the
+    // second finds no worker anymore and is ignored.
+    connect(worker, &TransferSession::transferFinished, this,
+            [this, requestId](const QString &path, bool ok, const QString &message) {
+                onTabTransferFinished(requestId, path, ok, message);
+            });
+    connect(worker, &TransferSession::errorOccurred, this,
+            [this, requestId](const QString &message) {
+                onTabTransferFinished(requestId, QString(), false, message);
+            });
+    connect(worker, &TransferSession::transferProgress, this,
+            [this, requestId](const QString &, qint64 bytesDone, qint64) {
+                auto tt = d->tabTransfers.find(requestId);
+                if (tt != d->tabTransfers.end()) {
+                    tt.value().bytesDone = bytesDone;
+                }
+            });
+    worker->start();
+    if (transfer.isUpload) {
+        worker->upload(transfer.localPath, transfer.remotePath, transfer.verify);
+    } else {
+        worker->download(transfer.remotePath, transfer.localPath, transfer.verify);
+    }
 }
 
-void AgentHttpServer::onTransferFinished(const QString &sessionId, const QString &requestId,
-                                         const QString &path, bool ok, const QString &message)
+void AgentHttpServer::onTabTransferFinished(const QString &requestId, const QString &path,
+                                            bool ok, const QString &message)
 {
-    const auto it = d->pendingOps.find(requestId);
-    if (it == d->pendingOps.end()) {
+    const auto tt = d->tabTransfers.find(requestId);
+    if (tt == d->tabTransfers.end()) {
+        return; // already handled (errorOccurred + transferFinished pair)
+    }
+
+    // "auto" fallback: walk the remaining chain while the failing method
+    // never got a single byte across (subsystem/channel-level failure).
+    // A failure after bytes moved is a real error and is reported as-is.
+    if (!ok && !tt.value().remainingMethods.isEmpty() && tt.value().bytesDone == 0
+        && d->pendingOps.contains(requestId)) {
+        TransferSession *old = tt.value().worker;
+        const QString failedMethod = old ? old->metaObject()->className() : QString();
+        AgentAudit::log(AgentAudit::Source::Rest,
+                        tt.value().isUpload ? QStringLiteral("tab_upload")
+                                            : QStringLiteral("tab_download"),
+                        QStringLiteral("method fallback after %1 failed with 0 bytes: %2")
+                            .arg(failedMethod, message),
+                        QStringLiteral("retry with %1").arg(tt.value().remainingMethods.first()));
+        if (old) {
+            old->stop();
+            old->deleteLater();
+        }
+        const QString next = tt.value().remainingMethods.takeFirst();
+        startTabTransferWorker(requestId, next);
         return;
     }
-    const Impl::PendingOp op = it.value();
-    d->pendingOps.erase(it);
-    QTcpSocket *socket = op.socket;
 
-    AgentAudit::log(AgentAudit::Source::Rest, op.action,
-                    QStringLiteral("session=%1 %2").arg(sessionId, op.detail),
-                    ok ? QStringLiteral("ok") : QStringLiteral("error: %1").arg(message));
+    TransferSession *worker = tt.value().worker;
+    d->tabTransfers.erase(tt);
 
-    if (!ok) {
-        respondError(socket, 500, message);
+    const auto opIt = d->pendingOps.find(requestId);
+    if (opIt != d->pendingOps.end()) {
+        const Impl::PendingOp op = opIt.value();
+        d->pendingOps.erase(opIt);
+        AgentAudit::log(AgentAudit::Source::Rest, op.action, op.detail,
+                        ok ? (message.isEmpty() ? QStringLiteral("ok") : QStringLiteral("ok %1").arg(message))
+                           : QStringLiteral("error: %1").arg(message));
+        if (!ok) {
+            respondError(op.socket, 500, message);
+        } else {
+            QJsonObject result;
+            result[QStringLiteral("ok")] = true;
+            result[QStringLiteral("path")] = path;
+            // Success note carries the method and md5 ("downloaded via scp,
+            // md5 verified: ...").
+            if (!message.isEmpty()) {
+                result[QStringLiteral("message")] = message;
+            }
+            respond(op.socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+        }
+    }
+    if (worker) {
+        worker->stop();
+        worker->deleteLater();
+    }
+}
+
+// Types the marker-bracketed command into the tab and starts the poll
+// timer. Called directly by the exec route, or ~400 ms after a reset
+// Ctrl+C. The leading bare newline submits any half-typed line first, so
+// the begin marker lands on a fresh prompt (first-char-eaten protection).
+void AgentHttpServer::beginTabExec(const QString &requestId)
+{
+    const auto it = d->tabExecs.find(requestId);
+    if (it == d->tabExecs.end()) {
         return;
     }
-    QJsonObject result;
-    result[QStringLiteral("sessionId")] = sessionId;
-    result[QStringLiteral("path")] = path;
-    result[QStringLiteral("ok")] = true;
-    respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+    Impl::TabExec &exec = it.value();
+
+    const QString token = QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+    exec.token = token;
+    // Echo-removal anchor: the echoed command's trailing text.
+    for (const QString &l : exec.command.split(QLatin1Char('\n'))) {
+        if (!l.trimmed().isEmpty()) {
+            exec.echoStrip = l.trimmed();
+        }
+    }
+    const QString input = QStringLiteral("\necho __HSSH_EXEC_B_%1__\n").arg(token)
+                          + exec.command + QLatin1Char('\n')
+                          + QStringLiteral("echo __HSSH_EXEC_E_%1__$?\n").arg(token);
+    if (!d->tabs->sendInputToTab(exec.tabIndex, input)) {
+        const auto opIt = d->pendingOps.find(requestId);
+        if (opIt != d->pendingOps.end()) {
+            const Impl::PendingOp op = opIt.value();
+            d->pendingOps.erase(opIt);
+            AgentAudit::log(AgentAudit::Source::Rest, op.action, op.detail,
+                            QStringLiteral("error: tab gone"));
+            respondError(op.socket, 404, "Tab closed before the exec could start");
+        }
+        finishTabExec(requestId);
+        return;
+    }
+
+    exec.timer = new QTimer(this);
+    exec.timer->setInterval(150);
+    connect(exec.timer, &QTimer::timeout, this, [this, requestId]() {
+        pollTabExec(requestId);
+    });
+    exec.timer->start();
+}
+
+// "user@host:port" for a tab index, preferring the live peer address over
+// the configured host (empty when the tab cannot be found).
+QString AgentHttpServer::tabTarget(int index) const
+{
+    if (!d->tabs) {
+        return {};
+    }
+    QVariantList tabsList = d->tabs->listTabs();
+    annotateTabRefs(tabsList, d->tabs->listSavedSessions());
+    for (const QVariant &v : tabsList) {
+        const QVariantMap m = v.toMap();
+        if (m.value(QStringLiteral("index")).toInt() == index) {
+            return m.value(QStringLiteral("target")).toString();
+        }
+    }
+    return {};
+}
+
+void AgentHttpServer::finishTabExec(const QString &requestId)
+{
+    const auto it = d->tabExecs.find(requestId);
+    if (it == d->tabExecs.end()) {
+        return;
+    }
+    if (it.value().timer) {
+        it.value().timer->stop();
+        it.value().timer->deleteLater();
+    }
+    d->tabExecBusy.remove(it.value().tabIndex);
+    d->tabExecs.erase(it);
+}
+
+void AgentHttpServer::pollTabExec(const QString &requestId)
+{
+    const auto it = d->tabExecs.find(requestId);
+    if (it == d->tabExecs.end()) {
+        return;
+    }
+    const Impl::TabExec exec = it.value();
+
+    // Connection-drop detection: a dead transport can never produce the end
+    // marker, so the exec would sit on the busy lock until its deadline
+    // (forever with timeout:0 — the 2026-09-11 "409 锁死"). Fail fast and
+    // release the tab instead.
+    bool tabGone = true;
+    bool tabDisconnected = false;
+    if (d->tabs) {
+        for (const QVariant &v : d->tabs->listTabs()) {
+            const QVariantMap m = v.toMap();
+            if (m.value(QStringLiteral("index")).toInt() == exec.tabIndex) {
+                tabGone = false;
+                tabDisconnected =
+                    m.value(QStringLiteral("type")).toString() == QLatin1String("ssh")
+                    && !m.value(QStringLiteral("connected")).toBool();
+                break;
+            }
+        }
+    }
+    if (tabGone || tabDisconnected) {
+        const auto opIt = d->pendingOps.find(requestId);
+        if (opIt != d->pendingOps.end()) {
+            const Impl::PendingOp op = opIt.value();
+            d->pendingOps.erase(opIt);
+            AgentAudit::log(AgentAudit::Source::Rest, op.action, op.detail,
+                            tabGone ? QStringLiteral("error: tab closed")
+                                    : QStringLiteral("error: connection lost"));
+            respondError(op.socket, tabGone ? 404 : 500,
+                         tabGone ? "Tab closed while the exec was running"
+                                 : "Connection lost while the exec was running "
+                                   "(the tab is disconnected; POST /tabs/<ref>/reconnect "
+                                   "or reconnect it in the GUI)");
+        }
+        finishTabExec(requestId);
+        return;
+    }
+
+    QString text;
+    if (!d->tabs || !d->tabs->readTabRange(exec.tabIndex, 0, 0, &text)) {
+        const auto opIt = d->pendingOps.find(requestId);
+        if (opIt != d->pendingOps.end()) {
+            const Impl::PendingOp op = opIt.value();
+            d->pendingOps.erase(opIt);
+            AgentAudit::log(AgentAudit::Source::Rest, op.action, op.detail,
+                            QStringLiteral("error: tab closed"));
+            respondError(op.socket, 404, "Tab closed while the exec was running");
+        }
+        finishTabExec(requestId);
+        return;
+    }
+
+    const QString beginMarker = QStringLiteral("__HSSH_EXEC_B_%1__").arg(exec.token);
+    const QString endPrefix = QStringLiteral("__HSSH_EXEC_E_%1__").arg(exec.token);
+    // The end command is `echo __HSSH_EXEC_E_<token>__$?`: the shell expands
+    // $? right after the trailing "__", so the output line is the prefix
+    // immediately followed by the exit code digits.
+    const QRegularExpression endRe(QStringLiteral("^%1(\\d+)$").arg(endPrefix));
+
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    int endLine = -1;
+    int exitCode = -1;
+    for (int i = lines.size() - 1; i >= 0; --i) {
+        const QRegularExpressionMatch m = endRe.match(lines.at(i).trimmed());
+        if (m.hasMatch()) {
+            endLine = i;
+            exitCode = m.captured(1).toInt();
+            break;
+        }
+    }
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const bool timedOut = endLine < 0 && exec.deadlineMs > 0 && now > exec.deadlineMs;
+    if (endLine < 0 && !timedOut) {
+        return; // keep polling
+    }
+
+    // The begin marker locates the start of THIS exec's output; when it has
+    // scrolled out of the buffer the capture is necessarily partial.
+    int beginLine = -1;
+    const int stop = endLine >= 0 ? endLine : lines.size();
+    for (int i = stop - 1; i >= 0; --i) {
+        if (lines.at(i).trimmed() == beginMarker) {
+            beginLine = i;
+            break;
+        }
+    }
+
+    QStringList region;
+    for (int i = beginLine + 1; i < stop; ++i) {
+        // Marker echo lines (typed input echo immediately, even while the
+        // command runs) carry the token and pollute the region; the actual
+        // marker OUTPUT lines are excluded by position (beginLine/endLine).
+        const QString trimmed = lines.at(i).trimmed();
+        if (trimmed.contains(endPrefix) || trimmed.contains(beginMarker)) {
+            continue;
+        }
+        region.append(lines.at(i));
+    }
+
+    // Strip the echoed command from the front: accumulate rows until the
+    // running concatenation ends with the command's last line (the prompt
+    // prefix and line wrapping make row-wise matching unreliable).
+    if (!exec.echoStrip.isEmpty()) {
+        QString acc;
+        int drop = 0;
+        for (; drop < region.size() && drop < 30; ++drop) {
+            acc += region.at(drop).trimmed();
+            if (acc.endsWith(exec.echoStrip)) {
+                region = region.mid(drop + 1);
+                break;
+            }
+        }
+    }
+
+    // Terminal rows are space-padded to full width: trim right (leading
+    // whitespace is meaningful output indentation and stays).
+    for (QString &line : region) {
+        while (line.endsWith(QLatin1Char(' '))) {
+            line.chop(1);
+        }
+    }
+    while (!region.isEmpty() && region.last().isEmpty()) {
+        region.removeLast();
+    }
+
+    const auto opIt = d->pendingOps.find(requestId);
+    if (opIt != d->pendingOps.end()) {
+        const Impl::PendingOp op = opIt.value();
+        d->pendingOps.erase(opIt);
+        AgentAudit::log(AgentAudit::Source::Rest, op.action, op.detail,
+                        timedOut ? QStringLiteral("timed out")
+                                 : QStringLiteral("ok exit=%1").arg(exitCode));
+        QJsonObject result;
+        result[QStringLiteral("output")] = region.join(QLatin1Char('\n'));
+        result[QStringLiteral("exitCode")] = exitCode;
+        result[QStringLiteral("timedOut")] = timedOut;
+        if (!exec.target.isEmpty()) {
+            result[QStringLiteral("target")] = exec.target;
+        }
+        if (exec.polluted) {
+            // The previous exec on this tab timed out and kept running; its
+            // late output may sit inside this capture. Verify side effects
+            // independently (read back files/state) before trusting them.
+            result[QStringLiteral("warning")] = QStringLiteral(
+                "previous exec on this tab timed out; its late output may have "
+                "polluted this capture — verify side effects independently");
+        }
+        if (beginLine < 0) {
+            // Begin marker scrolled out of the 10000-row buffer.
+            result[QStringLiteral("truncated")] = true;
+        }
+        if (timedOut) {
+            result[QStringLiteral("hint")] = QStringLiteral(
+                "the command may still be running, or the tab may be stuck at a "
+                "continuation prompt (>) — check the tab buffer (GET text), then "
+                "send Ctrl+C (send {\"data\":\"\\u0003\"}) or retry with reset:true");
+        }
+        respond(op.socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+    }
+    if (timedOut) {
+        // The command keeps running in the terminal; flag the tab so the
+        // NEXT exec carries a pollution warning.
+        d->tabExecPolluted.insert(exec.tabIndex);
+    }
+    finishTabExec(requestId);
 }
 
 void AgentHttpServer::respond(QTcpSocket *socket, int status, const QByteArray &body)

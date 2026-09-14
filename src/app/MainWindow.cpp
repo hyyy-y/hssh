@@ -1,10 +1,14 @@
 #include "MainWindow.h"
 
+#include "agent/AgentAudit.h"
 #include "agent/AgentHttpServer.h"
+#include "agent/AgentSudoAuth.h"
+#include "app/InputBroadcaster.h"
 #include "app/SessionTab.h"
 #include "app/dialogs/EditFolderDialog.h"
 #include "app/dialogs/NewSessionDialog.h"
 #include "app/dialogs/PortForwardDialog.h"
+#include "app/dialogs/SettingsDialog.h"
 #include "app/widgets/FileCompareWidget.h"
 #include "app/widgets/LocalFileWidget.h"
 #include "app/widgets/SessionManagerWidget.h"
@@ -32,6 +36,8 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPushButton>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QStatusBar>
 #include <QTabWidget>
@@ -40,6 +46,17 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QVBoxLayout>
+
+#ifdef HSSH_HAS_LIBSSH
+#  include <QMutexLocker>
+#  ifdef Q_OS_WIN
+#    include <winsock2.h>
+#    include <ws2tcpip.h>
+#  else
+#    include <netdb.h>
+#    include <sys/socket.h>
+#  endif
+#endif
 
 namespace hssh {
 
@@ -67,6 +84,9 @@ MainWindow::MainWindow(QWidget *parent)
         applyDefaultDockLayout();
     }
 
+    // Restore the tabs that were open in the previous run.
+    restorePreviousTabs();
+
     // Persisted preference: start the local agent API with the GUI so
     // external tools can drive open terminal tabs without a manual step.
     if (Config::instance().boolValue(QStringLiteral("agent/autostart"), false)) {
@@ -93,6 +113,7 @@ void MainWindow::saveWindowState()
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    Config::instance().setValue(QStringLiteral("ui/openTabs"), collectOpenTabs());
     saveWindowState();
     QMainWindow::closeEvent(event);
 }
@@ -150,7 +171,7 @@ void MainWindow::setupMenuBar()
     QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
     toolsMenu->addAction(tr("&Port Forwarding..."), this, &MainWindow::onPortForwarding);
     toolsMenu->addAction(tr("Send Command to All Terminals..."), this, &MainWindow::onSendCommand);
-    toolsMenu->addAction(tr("&Settings"));
+    toolsMenu->addAction(tr("&Settings..."), this, &MainWindow::onOpenSettings);
     toolsMenu->addAction(tr("&Key Manager"));
     toolsMenu->addSeparator();
     toolsMenu->addAction(tr("Set Lock Password..."), this, &MainWindow::onSetLockPassword);
@@ -226,9 +247,7 @@ void MainWindow::setupToolBar()
     toolBar->addSeparator();
     toolBar->addAction(tr("SFTP"), this, &MainWindow::onOpenSftp);
     toolBar->addAction(tr("Compare"), this, &MainWindow::onOpenCompare);
-    toolBar->addAction(tr("Settings"), this, []() {
-        // TODO: implement settings dialog
-    });
+    toolBar->addAction(tr("Settings"), this, &MainWindow::onOpenSettings);
 }
 
 void MainWindow::setupDockWidgets()
@@ -299,6 +318,9 @@ void MainWindow::setupCentralWidget()
         // removeTab only detaches the widget; delete it so the shell process
         // object (and its ConPTY/session resources) is actually destroyed.
         if (widget) {
+            if (auto *tabWidget = qobject_cast<SessionTab *>(widget)) {
+                InputBroadcaster::instance().unregisterTab(tabWidget);
+            }
             widget->deleteLater();
         }
         updateStatusBarInfo();
@@ -393,6 +415,7 @@ void MainWindow::onNewLocalTerminal(const QString &shellType)
     const QString title = tab->config().displayName();
     const int index = m_tabWidget->addTab(tab, title);
     m_tabWidget->setCurrentIndex(index);
+    InputBroadcaster::instance().registerTab(tab);
 }
 
 void MainWindow::onEditSession(const QModelIndex &index)
@@ -521,6 +544,33 @@ void MainWindow::onSessionActivated(const SessionConfig &config)
     });
     const int index = m_tabWidget->addTab(tab, config.displayName());
     m_tabWidget->setCurrentIndex(index);
+    InputBroadcaster::instance().registerTab(tab);
+}
+
+// Ad-hoc SSH tab for the agent API (POST /tabs with host+...). Unlike
+// onSessionActivated there is no repository entry to record.
+int MainWindow::openSshTab(const SessionConfig &config)
+{
+    if (config.sessionType() != SessionType::Ssh || config.host().isEmpty()) {
+        return -1;
+    }
+    auto *tab = new SessionTab(config, this);
+    connect(tab, &SessionTab::sizeChanged, this, [this, tab](int columns, int rows) {
+        if (m_tabWidget->currentWidget() == tab) {
+            m_termSizeLabel->setText(tr("%1×%2").arg(columns).arg(rows));
+        }
+    });
+    const int index = m_tabWidget->addTab(tab, config.displayName());
+    m_tabWidget->setCurrentIndex(index);
+    InputBroadcaster::instance().registerTab(tab);
+    return index;
+}
+
+void MainWindow::startAgent()
+{
+    if (!m_agentServer) {
+        onToggleAgent();
+    }
 }
 
 void MainWindow::onConnect()
@@ -544,6 +594,7 @@ void MainWindow::onDisconnect()
     }
     tab->disconnectSession();
     m_tabWidget->removeTab(index);
+    InputBroadcaster::instance().unregisterTab(tab);
     tab->deleteLater();
 }
 
@@ -656,9 +707,19 @@ void MainWindow::onToggleAgent()
 
     m_agentServer = new AgentHttpServer(this);
     m_agentServer->setTabsInterface(this);
+    connect(m_agentServer, &AgentHttpServer::acceptErrorOccurred, this,
+            [this](const QString &message) {
+                statusBar()->showMessage(
+                    tr("Agent accept error on %1: %2").arg(m_agentServer->url(), message),
+                    15000);
+            });
     if (!m_agentServer->start()) {
         QMessageBox::warning(this, tr("Agent"),
-                             tr("Failed to start agent: %1").arg(m_agentServer->errorString()));
+                             tr("Failed to start agent: %1\n\n"
+                                "Another hssh instance (or MCP auto-launched GUI) may already "
+                                "own the port — check GET http://127.0.0.1:8222/api/v1/health "
+                                "for its pid.")
+                                 .arg(m_agentServer->errorString()));
         m_agentServer->deleteLater();
         m_agentServer = nullptr;
         return;
@@ -682,9 +743,79 @@ QVariantList MainWindow::listTabs() const
         entry[QStringLiteral("type")] = config.sessionType() == SessionType::Ssh
                                             ? QStringLiteral("ssh")
                                             : QStringLiteral("local");
-        entry[QStringLiteral("connected")] = tab->sshSession()
-                                                 ? tab->sshSession()->isConnected()
-                                                 : true;
+        if (config.sessionType() == SessionType::Ssh) {
+            entry[QStringLiteral("sessionName")] = config.name();
+            entry[QStringLiteral("host")] = config.host();
+            entry[QStringLiteral("port")] = config.port();
+            entry[QStringLiteral("username")] = config.username();
+        }
+        const bool connected = tab->sshSession()
+                                   ? tab->sshSession()->isConnected()
+                                   : true;
+        entry[QStringLiteral("connected")] = connected;
+        // Ground truth: the live socket's peer address. The configured host
+        // can diverge from the real transport (session edited after the tab
+        // opened — the 2026-09-11 wrong-machine accident), so consumers must
+        // be able to see both.
+        if (connected && tab->sshSession()) {
+            const QString peer = tabPeerAddress(tab->sshSession());
+            if (!peer.isEmpty()) {
+                entry[QStringLiteral("peer")] = peer;
+            }
+        }
+        result.append(entry);
+    }
+    return result;
+}
+
+// IP address of the live SSH transport's remote peer, or empty when it
+// cannot be determined (non-libssh backend, already gone).
+QString MainWindow::tabPeerAddress(SshSession *session) const
+{
+#ifdef HSSH_HAS_LIBSSH
+    if (!session) {
+        return {};
+    }
+    ssh_session handle = session->sessionHandle();
+    QMutex *mutex = session->sessionMutex();
+    if (!handle || !mutex) {
+        return {};
+    }
+    QMutexLocker locker(mutex);
+    const socket_t fd = ssh_get_fd(handle);
+    if (fd == SSH_INVALID_SOCKET) {
+        return {};
+    }
+    sockaddr_storage addr{};
+    socklen_t len = sizeof(addr);
+    if (getpeername(fd, reinterpret_cast<sockaddr *>(&addr), &len) != 0) {
+        return {};
+    }
+    char host[NI_MAXHOST] = {};
+    if (getnameinfo(reinterpret_cast<sockaddr *>(&addr), len,
+                    host, sizeof(host), nullptr, 0, NI_NUMERICHOST) != 0) {
+        return {};
+    }
+    return QString::fromLatin1(host);
+#else
+    Q_UNUSED(session);
+    return {};
+#endif
+}
+
+QVariantList MainWindow::listSavedSessions() const
+{
+    QVariantList result;
+    const QList<SessionConfig> sessions = m_sessionRepository->loadAllSessions();
+    for (const SessionConfig &config : sessions) {
+        QVariantMap entry;
+        entry[QStringLiteral("name")] = config.name();
+        entry[QStringLiteral("displayName")] = config.displayName();
+        entry[QStringLiteral("host")] = config.host();
+        entry[QStringLiteral("port")] = config.port();
+        entry[QStringLiteral("username")] = config.username();
+        // Records whose secret failed to decrypt come back with an empty id.
+        entry[QStringLiteral("locked")] = config.id().isEmpty();
         result.append(entry);
     }
     return result;
@@ -701,6 +832,20 @@ bool MainWindow::sendToTab(int index, const QString &text)
     }
     // API semantic: "send a command" includes the Enter key.
     tab->runCommand(text.endsWith(QLatin1Char('\n')) ? text : text + QLatin1Char('\n'));
+    return true;
+}
+
+bool MainWindow::sendInputToTab(int index, const QString &data)
+{
+    if (index < 0 || index >= m_tabWidget->count()) {
+        return false;
+    }
+    auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(index));
+    if (!tab) {
+        return false;
+    }
+    // Raw input: no appended Enter, control bytes go through as-is.
+    tab->runCommand(data);
     return true;
 }
 
@@ -735,18 +880,39 @@ bool MainWindow::sendSecretToTab(int index, const QString &text)
     return sendToTab(index, text);
 }
 
-bool MainWindow::confirmSudo(int index, const QString &command)
+SessionConfig MainWindow::sessionConfigForTab(int index) const
 {
     if (index < 0 || index >= m_tabWidget->count()) {
+        return {};
+    }
+    auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(index));
+    return tab ? tab->config() : SessionConfig();
+}
+
+bool MainWindow::confirmSudo(int index, const QString &command, QString *reason)
+{
+    const auto fail = [reason](const QString &code) {
+        if (reason) {
+            *reason = code;
+        }
         return false;
+    };
+    if (index < 0 || index >= m_tabWidget->count()) {
+        return fail(QStringLiteral("unknown_tab"));
     }
     auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(index));
     if (!tab) {
-        return false;
+        return fail(QStringLiteral("unknown_tab"));
     }
 
     if (m_sudoApproved.contains(tab)) {
         return true; // Already approved within this tab's lifetime.
+    }
+
+    // Permanent grant list ("Always Allow" in a previous dialog).
+    const QString identity = AgentSudoAuth::identityFor(tab->config());
+    if (AgentSudoAuth::isAlwaysAllowed(identity)) {
+        return true;
     }
 
     QMessageBox box(this);
@@ -754,27 +920,63 @@ bool MainWindow::confirmSudo(int index, const QString &command)
     box.setIcon(QMessageBox::Warning);
     box.setText(tr("An AI agent requests to run this command with sudo in session \"%1\":")
                     .arg(m_tabWidget->tabText(index)));
-    box.setInformativeText(tr("Allow it? You will not be asked again while this tab stays open. "
+    box.setInformativeText(tr("Allow it? \"Always Allow\" grants sudo for this machine "
+                               "permanently; plain approval lasts while this tab stays open. "
                                "This dialog closes automatically in 30 seconds."));
     box.setDetailedText(command);
-    box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    QPushButton *yesButton = box.addButton(QMessageBox::Yes);
+    box.addButton(QMessageBox::No);
+    QAbstractButton *alwaysButton = nullptr;
+    if (!identity.isEmpty()) {
+        alwaysButton = box.addButton(tr("Always Allow"), QMessageBox::AcceptRole);
+    }
     box.setDefaultButton(QMessageBox::No);
     box.setWindowFlags(box.windowFlags() | Qt::WindowStaysOnTopHint);
 
-    // Make sure the request is noticed: bring the window forward first.
+    // An OWNED dialog is hidden while its owner is minimized — the request
+    // then auto-rejects after 30 s without the user ever seeing anything
+    // (observed as mysterious 403 storms). Restore the window first and
+    // flash the taskbar when the foreground lock refuses focus.
+    if (isMinimized()) {
+        showNormal();
+    }
     raise();
     activateWindow();
+    QApplication::alert(this);
+
+    AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("sudo_confirm"),
+                    QStringLiteral("tab=%1 identity=%2").arg(index).arg(identity),
+                    QStringLiteral("dialog shown"));
 
     // Unanswered dialogs must not hang the agent request forever.
+    bool timedOut = false;
     QTimer autoReject;
     autoReject.setSingleShot(true);
     autoReject.setInterval(30000);
-    connect(&autoReject, &QTimer::timeout, &box, &QMessageBox::reject);
+    connect(&autoReject, &QTimer::timeout, &box, [&timedOut, &box]() {
+        timedOut = true;
+        box.reject();
+    });
     autoReject.start();
 
-    if (box.exec() != QMessageBox::Yes) {
-        return false;
+    box.exec();
+    QAbstractButton *clicked = box.clickedButton();
+    if (clicked != yesButton && clicked != alwaysButton) {
+        const QString code = timedOut ? QStringLiteral("timeout")
+                                      : QStringLiteral("user_rejected");
+        AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("sudo_confirm"),
+                        QStringLiteral("tab=%1 identity=%2").arg(index).arg(identity),
+                        timedOut ? QStringLiteral("auto-rejected: no answer within 30 s")
+                                 : QStringLiteral("rejected by user"));
+        return fail(code);
     }
+    if (clicked == alwaysButton) {
+        AgentSudoAuth::setAlwaysAllowed(identity);
+    }
+    AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("sudo_confirm"),
+                    QStringLiteral("tab=%1 identity=%2").arg(index).arg(identity),
+                    clicked == alwaysButton ? QStringLiteral("approved (always)")
+                                            : QStringLiteral("approved"));
     m_sudoApproved.append(tab);
     return true;
 }
@@ -796,37 +998,10 @@ bool MainWindow::waitForPromptPattern(SessionTab *tab, const QStringList &patter
     return false;
 }
 
-bool MainWindow::waitForCompletion(SessionTab *tab, int timeoutMs)
-{
-    // Completion heuristic: output stops changing for a quiet period, or
-    // the last line looks like a shell prompt.
-    QElapsedTimer timer;
-    timer.start();
-    QString lastSnapshot;
-    qint64 lastChangeAt = timer.elapsed();
-    static const QRegularExpression promptRe(QStringLiteral("[$#]\\s*$"));
-    while (timer.elapsed() < timeoutMs) {
-        const QString snapshot = tab->readTerminalText(40);
-        if (snapshot != lastSnapshot) {
-            lastSnapshot = snapshot;
-            lastChangeAt = timer.elapsed();
-        }
-        const QStringList lines = snapshot.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-        if (!lines.isEmpty() && promptRe.match(lines.last()).hasMatch()) {
-            return true;
-        }
-        if (timer.elapsed() - lastChangeAt > 2000) {
-            return true; // Quiet for 2s: assume the command finished.
-        }
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
-        QThread::msleep(150);
-    }
-    return false;
-}
-
 bool MainWindow::sudoExec(int index, const QString &command, const QString &secret,
                           bool useStoredCredential, int timeoutMs,
-                          QString *output, bool *timedOut, QString *errorMessage)
+                          QString *output, bool *timedOut, int *exitCode,
+                          QString *errorMessage)
 {
     if (index < 0 || index >= m_tabWidget->count()) {
         if (errorMessage) {
@@ -844,16 +1019,29 @@ bool MainWindow::sudoExec(int index, const QString &command, const QString &secr
     if (timedOut) {
         *timedOut = false;
     }
+    if (exitCode) {
+        *exitCode = -1;
+    }
 
-    tab->runCommand(QStringLiteral("sudo ") + command + QLatin1Char('\n'));
+    // Completion sentinel appended after the command: proves the command
+    // really ran (the confirmation popup may have delayed the injection into
+    // a busy terminal) and carries the real exit code back. The echoed
+    // command line shows the token followed by a literal "$?", so only the
+    // actual output line matches the trailing-digits pattern.
+    const QString token = QStringLiteral("__HSSH_SUDO_RC_%1__")
+        .arg(QRandomGenerator::global()->generate64(), 16, 16, QLatin1Char('0'));
+    tab->runCommand(QStringLiteral("sudo ") + command
+                    + QStringLiteral("; echo %1$?\n").arg(token));
 
     // Wait briefly for a password prompt; no prompt means cached sudo.
+    // 10 s window: slow links need longer than the old 5 s to echo the
+    // prompt, and missing it means sudo starves on a password we never send.
     const QStringList passwordPatterns = {
         QStringLiteral("[sudo] password"),
         QStringLiteral("password for"),
         QStringLiteral("password:"),
     };
-    const bool needsPassword = waitForPromptPattern(tab, passwordPatterns, 5000);
+    const bool needsPassword = waitForPromptPattern(tab, passwordPatterns, 10000);
 
     if (needsPassword) {
         QString password = secret;
@@ -870,7 +1058,25 @@ bool MainWindow::sudoExec(int index, const QString &command, const QString &secr
         password.fill(QLatin1Char('\0'));
     }
 
-    const bool finished = waitForCompletion(tab, timeoutMs > 0 ? timeoutMs : 60000);
+    const int limitMs = timeoutMs > 0 ? timeoutMs : 60000;
+    const QRegularExpression rcRe(QRegularExpression::escape(token)
+                                  + QStringLiteral("(\\d+)"));
+    QElapsedTimer timer;
+    timer.start();
+    bool finished = false;
+    while (timer.elapsed() < limitMs) {
+        const QString text = tab->readTerminalText(80);
+        const QRegularExpressionMatch match = rcRe.match(text);
+        if (match.hasMatch()) {
+            if (exitCode) {
+                *exitCode = match.captured(1).toInt();
+            }
+            finished = true;
+            break;
+        }
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        QThread::msleep(150);
+    }
     if (output) {
         *output = tab->readTerminalText(60);
     }
@@ -893,6 +1099,23 @@ int MainWindow::openSessionTab(const QString &name)
     return -1;
 }
 
+bool MainWindow::reconnectTab(int index)
+{
+    if (index < 0 || index >= m_tabWidget->count()) {
+        return false;
+    }
+    auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(index));
+    if (!tab || tab->config().sessionType() != SessionType::Ssh) {
+        return false;
+    }
+    // Guard: reconnecting a LIVE tab would kill its foreground program.
+    if (tab->sshSession() && tab->sshSession()->isConnected()) {
+        return false;
+    }
+    tab->reconnectSession();
+    return true;
+}
+
 bool MainWindow::closeTab(int index)
 {
     if (index < 0 || index >= m_tabWidget->count()) {
@@ -904,6 +1127,7 @@ bool MainWindow::closeTab(int index)
     }
     tab->disconnectSession();
     m_tabWidget->removeTab(index);
+    InputBroadcaster::instance().unregisterTab(tab);
     tab->deleteLater();
     updateStatusBarInfo();
     return true;
@@ -927,6 +1151,12 @@ void MainWindow::updateRecentMenu()
     }
 }
 
+void MainWindow::onOpenSettings()
+{
+    SettingsDialog dialog(this);
+    dialog.exec();
+}
+
 void MainWindow::onSendCommand()
 {
     bool ok = false;
@@ -937,15 +1167,71 @@ void MainWindow::onSendCommand()
         return;
     }
 
-    int sent = 0;
-    const QString payload = command + QLatin1Char('\n');
+    const int sent = InputBroadcaster::instance().broadcast(
+        InputBroadcaster::instance().tabs(), command, true);
+    statusBar()->showMessage(tr("Command sent to %1 terminal(s).").arg(sent), 5000);
+}
+
+QVariantList MainWindow::collectOpenTabs() const
+{
+    QVariantList result;
+    if (!m_tabWidget) {
+        return result;
+    }
     for (int i = 0; i < m_tabWidget->count(); ++i) {
-        if (auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(i))) {
-            tab->runCommand(payload);
-            ++sent;
+        auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(i));
+        if (!tab) {
+            continue;
+        }
+        QVariantMap entry;
+        if (tab->config().sessionType() == SessionType::Ssh) {
+            entry[QStringLiteral("type")] = QStringLiteral("ssh");
+            entry[QStringLiteral("id")] = tab->config().id();
+        } else {
+            entry[QStringLiteral("type")] = QStringLiteral("local");
+            entry[QStringLiteral("shell")] = tab->config().shellType();
+        }
+        result.append(entry);
+    }
+    return result;
+}
+
+void MainWindow::restorePreviousTabs()
+{
+    if (!Config::instance().boolValue(QStringLiteral("session/restoreTabs"), true)) {
+        return;
+    }
+    const QVariantList saved = Config::instance().value(QStringLiteral("ui/openTabs")).toList();
+    if (saved.isEmpty()) {
+        return;
+    }
+
+    const int result = QMessageBox::question(
+        this, tr("Restore Session"),
+        tr("Restore the %1 terminal tab(s) that were open last time?").arg(saved.size()),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (result != QMessageBox::Yes) {
+        return;
+    }
+
+    // Index saved sessions by id for quick lookup.
+    QHash<QString, SessionConfig> byId;
+    for (const SessionConfig &config : m_sessionRepository->loadAllSessions()) {
+        byId.insert(config.id(), config);
+    }
+
+    for (const QVariant &entryVariant : saved) {
+        const QVariantMap entry = entryVariant.toMap();
+        const QString type = entry.value(QStringLiteral("type")).toString();
+        if (type == QLatin1String("ssh")) {
+            const QString id = entry.value(QStringLiteral("id")).toString();
+            if (byId.contains(id)) {
+                onSessionActivated(byId.value(id));
+            }
+        } else if (type == QLatin1String("local")) {
+            onNewLocalTerminal(entry.value(QStringLiteral("shell")).toString());
         }
     }
-    statusBar()->showMessage(tr("Command sent to %1 terminal(s).").arg(sent), 5000);
 }
 
 void MainWindow::applyFocusMode(bool enabled)

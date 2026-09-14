@@ -62,17 +62,17 @@
   - GSSAPI / Kerberos 认证（未实现）
   - SSH agent 转发（未实现）
 - [x] 会话管理器：
-  - 分组/标签树形结构
-  - 快速搜索会话
-  - 会话导入/导出
-  - 会话历史记录
+  - [x] 分组/标签树形结构
+  - [x] 快速搜索会话
+  - [x] 会话导入/导出（JSON，SessionRepository::importSessionsFromJson / exportSessionsToJson）
+  - [x] 会话历史记录（session_history 表 + 最近会话菜单）
 - [x] 自动登录：
-  - 保存用户名/密码（可选主密码加密）
-  - 自动执行登录后命令
+  - [x] 保存用户名/密码（可选主密码加密）
+  - [x] 自动执行登录后命令（SessionConfig::postLoginCommands）
 - [x] 连接复用：
-  - SSH ControlMaster 支持（未实现）
-  - 连接保活（KeepAlive）
-  - 断线自动重连
+  - [ ] SSH ControlMaster 支持
+  - [x] 连接保活（KeepAlive，SshSession::startKeepAliveLibSsh）
+  - [x] 断线自动重连（SshSession 自动重连 + 终端回车重连）
 
 ### 3.2 终端仿真
 
@@ -93,13 +93,14 @@
 ### 3.3 文件传输
 
 - [x] 内置 SFTP 客户端：
-  - 上传 / 下载 / 删除 / 重命名
-  - 拖拽传输
-  - 断点续传（未实现）
-  - 批量队列
+  - [x] 上传 / 下载 / 删除 / 重命名
+  - [x] 拖拽传输（SftpWidget 拖放上传）
+  - [x] 断点续传（PH1-01，单文件与目录均支持，取消/失败保留断点文件）
+  - [x] 批量队列（TransfersWidget）
 - [ ] 支持 SCP。
 - [ ] 支持 ZMODEM / YMODEM / XMODEM（rz/sz）。
 - [x] 本地文件管理器集成。
+- [x] 文件对比与同步（FileCompareWidget：目录对比、Diff 预览、批量同步，额外实现）。
 
 ### 3.4 端口转发与代理
 
@@ -117,7 +118,7 @@
 - [ ] 同步输入（Sync Input，多会话同时输入）。
 - [ ] 自由输入模式（Free Type Mode）。
 - [x] 专注模式（Focus Mode）。
-- [x] 会话日志记录（手动/自动）（自动记录到 AppData/logs）。
+- [x] 会话日志记录（自动记录到 AppData/logs，Config `session/logging` 开关）
 - [x] 屏幕锁定（Lock Screen）。
 - [ ] 脚本与宏（Script / Macro）。
 - [ ] 插件系统（Plugin System）。
@@ -151,6 +152,8 @@ hssh 不仅是一个 GUI 客户端，还应该是一个**可被外部工具调�
   - [ ] `ssh_forward(session_id, type, local, remote)`：端口转发
   - [x] `ssh_disconnect(session_id)`：断开连接
   - [x] `list_sessions()`：列出活跃会话
+  - [x] `get_public_key()`：获取 Agent 加密公钥（用于密码加密传输）
+  - [x] `ssh_sudo(session_id, command)`：sudo 提权执行（GUI 确认弹窗）
 - [x] 支持 STDIO（SSE 待实现）MCP 传输方式。
 - [x] 提供 MCP 配置文件示例，方便 Claude Code 接入（见 docs/agent.md）。
 
@@ -170,6 +173,7 @@ hssh 不仅是一个 GUI 客户端，还应该是一个**可被外部工具调�
 
 - [x] 提供 `hssh cli exec --host ... --command ...` 等非交互式命令。
 - [x] 支持 JSON 输出，方便脚本解析。
+- [x] 提供 `hssh cli cipher <text>` 子命令（用 Agent 公钥加密密码）。
 
 ### 4.3 Agent 安全模型
 

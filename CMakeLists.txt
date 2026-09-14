@@ -66,10 +66,9 @@ set(HSSH_SOURCES
     src/agent/AgentHttpServer.h
     src/agent/AgentMcpServer.cpp
     src/agent/AgentMcpServer.h
-    src/agent/AgentSession.cpp
-    src/agent/AgentSession.h
-    src/agent/AgentSessionRegistry.cpp
-    src/agent/AgentSessionRegistry.h
+    src/agent/AgentSudoAuth.h
+    src/app/InputBroadcaster.cpp
+    src/app/InputBroadcaster.h
     src/app/MainWindow.cpp
     src/app/MainWindow.h
     src/app/SessionTab.cpp
@@ -82,6 +81,8 @@ set(HSSH_SOURCES
     src/app/dialogs/NewSessionDialog.h
     src/app/dialogs/PortForwardDialog.cpp
     src/app/dialogs/PortForwardDialog.h
+    src/app/dialogs/SettingsDialog.cpp
+    src/app/dialogs/SettingsDialog.h
     src/app/widgets/DiffView.cpp
     src/app/widgets/DiffView.h
     src/app/widgets/FileCompareWidget.cpp
@@ -108,10 +109,16 @@ set(HSSH_SOURCES
     src/core/SessionRepository.h
     src/core/SftpSession.cpp
     src/core/SftpSession.h
+    src/core/ChannelCopySession.cpp
+    src/core/ChannelCopySession.h
+    src/core/TransferSession.h
     src/core/SshConnect.cpp
     src/core/SshConnect.h
     src/core/SshSession.cpp
     src/core/SshSession.h
+    src/core/transport/ITransport.h
+    src/core/transport/TransportFactory.cpp
+    src/core/transport/TransportFactory.h
     src/terminal/LocalShellProcess.cpp
     src/terminal/LocalShellProcess.h
     src/terminal/ShellProcess.cpp

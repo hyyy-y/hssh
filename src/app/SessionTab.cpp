@@ -89,6 +89,13 @@ void SessionTab::disconnectSession()
     }
 }
 
+void SessionTab::reconnectSession()
+{
+    if (m_terminalSession) {
+        m_terminalSession->reconnect();
+    }
+}
+
 void SessionTab::runCommand(const QString &command)
 {
     if (m_terminalSession) {

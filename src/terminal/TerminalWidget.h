@@ -138,6 +138,13 @@ private:
     void onScrollbackLinePushed(int oldSize);
     void onScrollbackLineDropped();
 
+    // Coalesced repaint: the high-frequency vterm callbacks (damage, scroll
+    // moverect, cursor motion) merge into one partial repaint per display
+    // frame instead of a full-widget repaint per event-loop turn.
+    void scheduleRepaint(const QRect &rect);
+    QRect m_pendingRepaint; // pixel coords; null = nothing pending
+    bool m_repaintScheduled = false;
+
     VTerm *m_vterm = nullptr;
     VTermScreen *m_screen = nullptr;
     std::deque<ScrollbackLine> m_scrollback;

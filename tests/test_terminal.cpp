@@ -1,7 +1,9 @@
 #include "terminal/LocalShellProcess.h"
 #include "terminal/TerminalWidget.h"
 
+#include <QApplication>
 #include <QCoreApplication>
+#include <QKeyEvent>
 #include <QSignalSpy>
 #include <QtTest/QtTest>
 
@@ -115,6 +117,49 @@ private slots:
         QVERIFY(!def.isEmpty());
         QVERIFY(!LocalShellProcess::shellExecutable(def).isEmpty());
     }
+
+#ifdef HSSH_HAS_LIBVTERM
+    void testDsrReplyFlushedOnFeedData()
+    {
+        TerminalWidget widget;
+        widget.show();
+        QTest::qWaitForWindowExposed(&widget);
+
+        QSignalSpy sendSpy(&widget, &TerminalWidget::dataToSend);
+
+        // Cursor position request (readline sends \x1b[6n when redrawing the
+        // prompt). The terminal must reply \x1b[<row>;<col>R even when input
+        // is driven through the API (no key events), or readline's line
+        // redraws misplace content and the display glues lines together.
+        widget.feedData(QByteArray("\x1b[6n"));
+        QVERIFY(!sendSpy.isEmpty());
+        const QByteArray reply = sendSpy.takeFirst().at(0).toByteArray();
+        QVERIFY2(reply.startsWith("\x1b["), reply.toHex().constData());
+        QVERIFY2(reply.endsWith("R"), reply.toHex().constData());
+    }
+
+    void testCtrlKeySequences()
+    {
+        TerminalWidget widget;
+        widget.show();
+        QTest::qWaitForWindowExposed(&widget);
+
+        QSignalSpy sendSpy(&widget, &TerminalWidget::dataToSend);
+
+        // Qt delivers Ctrl+letter with the control character in text();
+        // the terminal must emit the raw control byte (0x03 / 0x04), not a
+        // libvterm CSI u sequence that the remote shell can't parse.
+        QKeyEvent ctrlC(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier, QString(QChar(0x03)));
+        QApplication::sendEvent(&widget, &ctrlC);
+        QVERIFY(!sendSpy.isEmpty());
+        QCOMPARE(sendSpy.takeFirst().at(0).toByteArray(), QByteArray(1, '\x03'));
+
+        QKeyEvent ctrlD(QEvent::KeyPress, Qt::Key_D, Qt::ControlModifier, QString(QChar(0x04)));
+        QApplication::sendEvent(&widget, &ctrlD);
+        QVERIFY(!sendSpy.isEmpty());
+        QCOMPARE(sendSpy.takeFirst().at(0).toByteArray(), QByteArray(1, '\x04'));
+    }
+#endif
 
 private:
     [[nodiscard]] static QString defaultShellForPlatform()

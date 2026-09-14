@@ -33,6 +33,9 @@ signals:
 public slots:
     void connectSession();
     void disconnectSession();
+    // Close the current shell process and start a fresh one with the same
+    // config (Enter-to-reconnect equivalent; used by the agent API).
+    void reconnectSession();
     void runCommand(const QString &command);
 
 private:

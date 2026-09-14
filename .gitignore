@@ -46,3 +46,10 @@ _stackwalk.py
 *.log
 terminal_debug.log
 lifecycle.txt
+
+# Local ops memory (contains real internal IPs/hosts/paths ¡ª never commit)
+AGENTS.md
+
+# Scratch test/build dumps
+/nintest/
+*.zip

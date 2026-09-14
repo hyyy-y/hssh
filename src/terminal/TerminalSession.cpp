@@ -141,6 +141,13 @@ void TerminalSession::onProcessFinished(int exitCode)
 void TerminalSession::onProcessError(const QString &message)
 {
     m_terminal->feedData(tr("\n[Error: %1]\n").arg(message).toUtf8());
+    // A failed (re)connect emits errorOccurred but neither finished nor
+    // linkDown, so m_linkDead stayed false and the Enter-to-reconnect gesture
+    // silently died after the first attempt. Re-arm it on every failure.
+    if (!m_linkDead) {
+        m_linkDead = true;
+        m_terminal->feedData(disconnectBanner(false));
+    }
 }
 
 void TerminalSession::onLinkDown(bool autoReconnect)

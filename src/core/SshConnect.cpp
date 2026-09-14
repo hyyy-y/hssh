@@ -48,7 +48,8 @@ int authenticate(ssh_session session, const SessionConfig &config)
 
 } // namespace
 
-ssh_session sshConnectAndAuthenticate(const SessionConfig &config, QString *errorMessage)
+ssh_session sshConnectAndAuthenticate(const SessionConfig &config, QString *errorMessage,
+                                      long postConnectTimeoutSec)
 {
     ssh_session session = ssh_new();
     if (!session) {
@@ -79,6 +80,17 @@ ssh_session sshConnectAndAuthenticate(const SessionConfig &config, QString *erro
         ssh_free(session);
         return nullptr;
     }
+
+    // The timeout above must apply to ssh_connect ONLY. libssh reuses
+    // SSH_OPTIONS_TIMEOUT for every later blocking call (channel window
+    // waits, reads, flushes): on a congested link a channel window that
+    // takes >10 s to drain makes ssh_channel_write return a SHORT count
+    // without an error, and sftp_write only logs that — the SFTP byte
+    // stream desyncs and uploads get silently corrupted. Callers choose the
+    // post-connect behavior: 0 waits indefinitely (mandatory for bulk
+    // transfers), a positive value bounds channel operations so a wedged
+    // sshd cannot hang an exec worker forever.
+    ssh_options_set(session, SSH_OPTIONS_TIMEOUT, &postConnectTimeoutSec);
 
     rc = authenticate(session, config);
     if (rc != SSH_AUTH_SUCCESS) {

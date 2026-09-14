@@ -49,6 +49,35 @@ private slots:
         QCOMPARE(Config::instance().stringValue(QStringLiteral("test/missing"), QStringLiteral("fallback")), QStringLiteral("fallback"));
     }
 
+    void testRegistrySeeded()
+    {
+        const QVector<ConfigKey> keys = Config::registeredKeys();
+        QVERIFY(!keys.isEmpty());
+        // Defaults exist for the seeded user-facing keys.
+        QVERIFY(Config::findKey(QStringLiteral("theme/name")) != nullptr);
+        QVERIFY(Config::findKey(QStringLiteral("net/proxyType")) != nullptr);
+        QVERIFY(Config::findKey(QStringLiteral("session/logging")) != nullptr);
+        QCOMPARE(Config::findKey(QStringLiteral("theme/name"))->enumOptions.size(), 2);
+    }
+
+    void testValueChangedSignal()
+    {
+        QString changedKey;
+        QVariant changedValue;
+        const QMetaObject::Connection conn =
+            QObject::connect(&Config::instance(), &Config::valueChanged, &Config::instance(),
+                             [&](const QString &key, const QVariant &value) {
+                                 changedKey = key;
+                                 changedValue = value;
+                             });
+        Config::instance().setValue(QStringLiteral("test/signal"), 7);
+        QCOMPARE(changedKey, QStringLiteral("test/signal"));
+        QCOMPARE(changedValue.toInt(), 7);
+        Config::instance().remove(QStringLiteral("test/signal"));
+        // The connection must not outlive the captured locals.
+        QObject::disconnect(conn);
+    }
+
     void testCryptoRoundTrip()
     {
         const QByteArray secret("s3cret-password!");

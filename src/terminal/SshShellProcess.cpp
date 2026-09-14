@@ -63,6 +63,15 @@ bool SshShellProcess::start()
     // Connect signals first so that the initial banner/prompt data emitted by
     // the shell reader thread is not lost before SshShellProcess is wired up.
     // The connect runs asynchronously; success/failure arrives via signals.
+    // Push the widget's current size before connecting: a reconnect
+    // (close+start) creates a fresh SshSession whose pending pty size is
+    // unset, so the new pty would open at the 80x24 default while the widget
+    // keeps its real size — readline then wraps at 80 columns and glues
+    // prompt-redraw fragments mid-line across existing screen content.
+    // SshSession caches the size and applies it when the shell channel opens.
+    if (m_size.width() > 0 && m_size.height() > 0) {
+        m_session->setShellSize(m_size.width(), m_size.height());
+    }
     m_session->connectToHost();
     return true;
 #else

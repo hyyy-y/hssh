@@ -33,7 +33,7 @@ hssh --agent-mcp
 |------|------|------|
 | `list_sessions` | - | 列出当前管理的 SSH 会话 |
 | `ssh_connect` | `sessionName`/`sessionId`（库内凭据，首选）；或 `host, port?, username?, authMethod?, passwordCipher?, privateKeyPath?, keyPassphraseCipher?` | 建立 SSH 连接，返回 `sessionId` |
-| `ssh_exec` | `session_id`, `command` | 在会话上执行命令，返回 `{output, exitCode}` |
+| `ssh_exec` | `session_id`, `command`, `timeout?`, `stdin?` | 在会话上执行命令，返回 `{output, exitCode}`；`timeout` 毫秒（默认 120000，0=不限），`stdin` 写入后 stdin 自动 EOF（交互式命令不会再永久挂起） |
 | `ssh_upload` | `session_id`, `local_path`, `remote_path` | 通过 SFTP 上传文件 |
 | `ssh_download` | `session_id`, `remote_path`, `local_path` | 通过 SFTP 下载文件 |
 | `ssh_disconnect` | `session_id` | 断开并释放会话 |
@@ -61,12 +61,15 @@ hssh --agent-http [--port 8222]
 | GET | `/api/v1/status` | 服务状态、版本、活跃会话 |
 | GET | `/api/v1/sessions` | 会话列表 |
 | POST | `/api/v1/sessions` | 创建会话：`{sessionName}` / `{sessionId}`（库内凭据，首选）；或 `{host, port?, username?, authMethod?, passwordCipher?, privateKeyPath?, keyPassphraseCipher?}`，返回 `{sessionId}` |
-| POST | `/api/v1/sessions/<id>/exec` | 执行命令，body: `{command}`，返回 `{output, exitCode}` |
+| POST | `/api/v1/sessions/<id>/exec` | 执行命令，body: `{command, timeout?, stdin?, stdinCipher?}`，返回 `{output, exitCode}`。`timeout` 毫秒（默认 120000，显式 0=不限），超时/取消返回 500 并带部分输出；`stdin` 明文或 `stdinCipher` 密文写入 stdin 后自动 EOF（sudo -S 等交互输入场景用密文形式） |
+| POST | `/api/v1/sessions/<id>/exec/kill` | 取消该会话正在运行的 exec（挂起的 exec 请求随即以 "Cancelled" 结束）；无运行中 exec 时返回 409 |
 | POST | `/api/v1/sessions/<id>/upload` | 上传文件，body: `{localPath, remotePath}` |
 | POST | `/api/v1/sessions/<id>/download` | 下载文件，body: `{remotePath, localPath}` |
 | DELETE | `/api/v1/sessions/<id>` | 断开并删除会话 |
 
 > **密码安全**：明文 `password` 字段一律 400 拒绝。密码只能用 `passwordCipher`（`base64(RSA-OAEP-SHA256(明文))`，公钥见 `/api/v1/keys`）或会话名引用库内凭据。可用 `hssh cli cipher <text>` 在本地产密文。
+
+> **大文件传输**：upload/download 支持断点续传——失败后重试同一请求会从已传输的字节处继续（错误消息里带 `x of y bytes transferred` 进度）。传输是同步的，HTTP 响应要等传完才返回；慢链路上大文件请调大客户端超时（PowerShell `Invoke-RestMethod -TimeoutSec`，默认 100 秒会在传输中超时断开）。
 
 ```bash
 curl http://127.0.0.1:8222/api/v1/status
@@ -91,10 +94,11 @@ GUI 模式下启动 Agent 后（Tools → Start Agent，或勾选 Auto-start Age
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/tabs` | 列出打开的终端标签 `[{index,title,type,connected}]` |
+| GET | `/api/v1/tabs` | 列出打开的终端标签 `[{index,title,type,connected,sessionName?,host?,port?,username?}]`（host/port/username/sessionName 仅 SSH 标签有） |
+| GET | `/api/v1/saved-sessions` | 列出已保存会话（不含凭据）`[{name,displayName,host,port,username,locked}]`；AI 收到"连 XX/看 XX"类请求时先查此表定位目标 |
 | POST | `/api/v1/tabs` | `{shellType?}` 打开本地终端（CMD/PowerShell/WSL/...）；`{session:"名字"}` 打开已保存的 SSH 会话（按会话名/主机/id 匹配），返回 `{index}` |
 | GET | `/api/v1/tabs/<i>/text?lines=N&from=M` | 读取终端缓冲区文本（`from` 跳过前 M 行，`lines` 限制末尾 N 行，缺省全部） |
-| POST | `/api/v1/tabs/<i>/send` | 发送命令（自动追加回车），body: `{command}` |
+| POST | `/api/v1/tabs/<i>/send` | 发送命令（自动追加回车），body: `{command}`；或原始输入 `{data}`——不追加回车，用于控制字符（Ctrl+C=`"\u0003"`、Ctrl+D=`"\u0004"`） |
 | POST | `/api/v1/tabs/<i>/secure-input` | 密文写入终端（密码输入用），body: `{cipher}` |
 | POST | `/api/v1/tabs/<i>/sudo` | sudo 协议：弹窗向用户确认后执行并自动输密码，body: `{command, passwordCipher?, useStoredCredential?, timeout?}` |
 | DELETE | `/api/v1/tabs/<i>` | 关闭标签页（断开并移除） |
@@ -104,7 +108,7 @@ GUI 模式下启动 Agent 后（Tools → Start Agent，或勾选 Auto-start Age
 AI 工具的 sudo 命令必须走 `/api/v1/tabs/<i>/sudo`：
 
 1. hssh 弹窗向用户展示**完整命令**和目标会话，用户点 Allow 才执行；同一标签页生命周期内只弹一次；30 秒未操作视为拒绝（403）
-2. 自动处理密码提示（密文 `passwordCipher` 或库内凭据 `useStoredCredential`，均可缺省）
+2. 自动处理密码提示（密文 `passwordCipher` 或库内凭据 `useStoredCredential`，均可缺省；缺省时自动用该标签页对应已保存会话的库内凭据）
 3. 默认 60 秒等待输出，返回 `{output, timedOut}`；出现密码提示但无凭据时返回 428 `passwordRequired`
 
 MCP（headless）下 `ssh_sudo` 一律报错——sudo 必须有 GUI 弹窗确认。

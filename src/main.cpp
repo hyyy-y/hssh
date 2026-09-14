@@ -12,6 +12,7 @@
 #include <QMessageBox>
 #include <QPalette>
 #include <QTextStream>
+#include <QTimer>
 #include <QTranslator>
 
 #include "agent/AgentAudit.h"
@@ -364,10 +365,12 @@ int runCliExec(int argc, char *argv[])
     return 0;
 }
 
-// Headless agent modes: hssh --agent-mcp (MCP stdio server) and
-// hssh --agent-http [--port N] (local REST API).
+// Headless agent modes: hssh --agent-mcp (MCP stdio server, a bridge to the
+// GUI agent — it opens no SSH connections of its own) and hssh --agent-http
+// [--port N] (local REST API).
 int runAgentCli(int argc, char *argv[], bool mcpMode)
 {
+    Q_UNUSED(mcpMode)
     QCoreApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("hssh"));
     app.setOrganizationName(QStringLiteral("hssh-project"));
@@ -453,6 +456,14 @@ int main(int argc, char *argv[])
 
     hssh::MainWindow window;
     window.show();
+
+    // --agent: start the local REST agent with the GUI. The MCP bridge
+    // auto-launches the GUI this way when no agent is reachable.
+    if (rawArgs.contains(QStringLiteral("--agent"))) {
+        QTimer::singleShot(0, &window, [&window]() {
+            window.startAgent();
+        });
+    }
 
     return app.exec();
 }
