@@ -13,16 +13,23 @@
 #include "app/dialogs/ImportSshConfigDialog.h"
 #include "app/dialogs/NewSessionDialog.h"
 #include "app/dialogs/PortForwardDialog.h"
+#include "app/dialogs/ProcessDialog.h"
+#include "app/dialogs/DockerDialog.h"
+#include "app/dialogs/NetworkToolsDialog.h"
+#include "app/dialogs/SchedulerDialog.h"
 #include "app/dialogs/SessionLogViewer.h"
+#include "app/dialogs/ServerTransferDialog.h"
 #include "app/dialogs/SettingsDialog.h"
 #include "app/widgets/CommandPalette.h"
 #include "app/widgets/FileCompareWidget.h"
 #include "app/widgets/LocalFileWidget.h"
+#include "app/widgets/MonitorWidget.h"
 #include "app/widgets/SessionManagerWidget.h"
 #include "app/widgets/TerminalOutlineWidget.h"
 #include "app/widgets/SftpWidget.h"
 #include "app/widgets/TransfersWidget.h"
 #include "core/SessionRepository.h"
+#include "core/PortForward.h"
 #include "core/SshSession.h"
 #include "hssh/Version.h"
 #include "terminal/LocalShellProcess.h"
@@ -186,6 +193,7 @@ void MainWindow::setupMenuBar()
     viewMenu->addAction(m_fileDock->toggleViewAction());
     viewMenu->addAction(m_transfersDock->toggleViewAction());
     viewMenu->addAction(m_outlineDock->toggleViewAction());
+    viewMenu->addAction(m_monitorDock->toggleViewAction());
     viewMenu->addSeparator();
     viewMenu->addAction(tr("Full Screen"), QKeySequence::FullScreen, this, [this]() {
         isFullScreen() ? showNormal() : showFullScreen();
@@ -202,6 +210,28 @@ void MainWindow::setupMenuBar()
     QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
     toolsMenu->addAction(tr("&Port Forwarding..."), this, &MainWindow::onPortForwarding);
     toolsMenu->addAction(tr("Send Command to All Terminals..."), this, &MainWindow::onSendCommand);
+    // PH3-13: copy a file between two saved sessions (verified two-hop).
+    toolsMenu->addAction(tr("Server-to-Server Transfer..."), this, [this]() {
+        // Real endpoints of open SSH tabs: the transfer dialog warns when a
+        // selected session has drifted from an open same-name tab.
+        QList<QPair<QString, QString>> endpoints;
+        for (int i = 0; i < m_tabWidget->count(); ++i) {
+            auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(i));
+            if (!tab || tab->config().sessionType() != SessionType::Ssh
+                || !tab->sshSession()) {
+                continue;
+            }
+            const QString peer = tabPeerAddress(tab->sshSession());
+            const SessionConfig &config = tab->config();
+            endpoints.append({config.name(),
+                              QStringLiteral("%1@%2:%3")
+                                  .arg(config.username(),
+                                       peer.isEmpty() ? config.host() : peer)
+                                  .arg(config.port())});
+        }
+        ServerTransferDialog dialog(m_sessionRepository->loadAllSessions(), endpoints, this);
+        dialog.exec();
+    });
     toolsMenu->addAction(tr("&Appearance..."), this, [this]() {
         AppearanceDialog dialog(this);
         dialog.exec();
@@ -409,6 +439,31 @@ void MainWindow::setupDockWidgets()
     m_outlineDock->setWidget(outline);
     addDockWidget(Qt::RightDockWidgetArea, m_outlineDock);
     m_outlineDock->hide();
+
+    // B6-1: server monitor (CPU/mem curves, net rates, disks) — samples over
+    // a dedicated connection, never through the visible terminal.
+    m_monitorDock = new QDockWidget(tr("Server Monitor"), this);
+    m_monitorDock->setObjectName(QStringLiteral("monitorDock"));
+    auto *monitor = new MonitorWidget(m_monitorDock);
+    monitor->setSessionProvider([this]() -> QList<QPair<QString, SessionConfig>> {
+        // Called during MainWindow construction (docks build before the
+        // central tab widget) — stay null-safe.
+        QList<QPair<QString, SessionConfig>> sessions;
+        if (!m_tabWidget) {
+            return sessions;
+        }
+        for (int i = 0; i < m_tabWidget->count(); ++i) {
+            auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(i));
+            if (tab && tab->config().sessionType() == SessionType::Ssh && tab->sshSession()
+                && tab->sshSession()->isConnected()) {
+                sessions.append({m_tabWidget->tabText(i), tab->config()});
+            }
+        }
+        return sessions;
+    });
+    m_monitorDock->setWidget(monitor);
+    addDockWidget(Qt::RightDockWidgetArea, m_monitorDock);
+    m_monitorDock->hide();
 }
 
 void MainWindow::setupCentralWidget()
@@ -842,6 +897,28 @@ void MainWindow::onTabContextMenu(const QPoint &pos)
             SessionLogViewer viewer(this);
             viewer.selectFile(tab->terminalSession()->logFilePath());
             viewer.exec();
+        });
+    }
+    // B6-2: process manager for SSH tabs (own connection, not the terminal).
+    if (tab->config().sessionType() == SessionType::Ssh) {
+        menu.addAction(tr("Process List..."), this, [this, tab]() {
+            ProcessDialog dialog(tab->config(), this);
+            dialog.exec();
+        });
+        // B6-3/4/5: network tools, docker management, scheduled tasks —
+        // all on dedicated connections (or visible injection for terminal
+        // mode tasks).
+        menu.addAction(tr("Network Tools..."), this, [this, tab]() {
+            NetworkToolsDialog dialog(tab->config(), this);
+            dialog.exec();
+        });
+        menu.addAction(tr("Docker..."), this, [this, tab]() {
+            DockerDialog dialog(tab->config(), this);
+            dialog.exec();
+        });
+        menu.addAction(tr("Scheduled Tasks..."), this, [this, tab]() {
+            SchedulerDialog dialog(tab, this);
+            dialog.exec();
         });
     }
     menu.addSeparator();
@@ -1956,6 +2033,210 @@ bool MainWindow::reconnectTab(int index)
     }
     tab->reconnectSession();
     return true;
+}
+
+// B5-1: shared tab -> PortForwardManager resolution for the agent API.
+static PortForwardManager *forwardManagerForTab(const QTabWidget *tabs, int index,
+                                                QString *errorMessage)
+{
+    if (index < 0 || index >= tabs->count()) {
+        if (errorMessage) *errorMessage = QStringLiteral("unknown_tab");
+        return nullptr;
+    }
+    auto *tab = qobject_cast<SessionTab *>(tabs->widget(index));
+    SshSession *ssh = tab ? tab->sshSession() : nullptr;
+    PortForwardManager *manager = ssh ? ssh->portForwardManager() : nullptr;
+    if (!manager) {
+        if (errorMessage) *errorMessage = QStringLiteral("not_an_ssh_tab");
+    }
+    return manager;
+}
+
+bool MainWindow::addForwardToTab(int index, const QVariantMap &spec, QString *errorMessage)
+{
+    const auto fail = [errorMessage](const QString &what) {
+        if (errorMessage) {
+            *errorMessage = what;
+        }
+        return false;
+    };
+
+    QString resolveError;
+    PortForwardManager *manager = forwardManagerForTab(m_tabWidget, index, &resolveError);
+    if (!manager) {
+        return fail(resolveError);
+    }
+
+    ForwardSpec forward;
+    const QString type = spec.value(QStringLiteral("type")).toString();
+    if (type == QLatin1String("remote")) {
+        forward.type = ForwardSpec::Type::Remote;
+    } else if (type == QLatin1String("dynamic")) {
+        forward.type = ForwardSpec::Type::Dynamic;
+    } else if (type.isEmpty() || type == QLatin1String("local")) {
+        forward.type = ForwardSpec::Type::Local;
+    } else {
+        return fail(QStringLiteral("type must be local, remote or dynamic"));
+    }
+
+    forward.name = spec.value(QStringLiteral("name")).toString();
+    QString bindAddress = spec.value(QStringLiteral("bindAddress")).toString();
+    if (bindAddress.isEmpty()) {
+        bindAddress = QStringLiteral("127.0.0.1");
+    }
+    forward.bindAddress = bindAddress;
+    const int bindPort = spec.value(QStringLiteral("bindPort")).toInt();
+    if (bindPort < 1 || bindPort > 65535) {
+        return fail(QStringLiteral("bindPort must be 1-65535"));
+    }
+    forward.bindPort = static_cast<quint16>(bindPort);
+
+    if (forward.type != ForwardSpec::Type::Dynamic) {
+        forward.targetHost = spec.value(QStringLiteral("targetHost")).toString();
+        const int targetPort = spec.value(QStringLiteral("targetPort")).toInt();
+        if (forward.targetHost.isEmpty() || targetPort < 1 || targetPort > 65535) {
+            return fail(QStringLiteral("targetHost and targetPort (1-65535) are required "
+                                       "for local/remote forwards"));
+        }
+        forward.targetPort = static_cast<quint16>(targetPort);
+    }
+
+    return manager->addForward(forward, errorMessage);
+}
+
+QVariantList MainWindow::listForwardsForTab(int index) const
+{
+    QString resolveError;
+    PortForwardManager *manager = forwardManagerForTab(m_tabWidget, index, &resolveError);
+    if (!manager) {
+        return {};
+    }
+
+    static const auto typeText = [](ForwardSpec::Type type) {
+        switch (type) {
+        case ForwardSpec::Type::Remote: return QStringLiteral("remote");
+        case ForwardSpec::Type::Dynamic: return QStringLiteral("dynamic");
+        case ForwardSpec::Type::Local: break;
+        }
+        return QStringLiteral("local");
+    };
+
+    QVariantList result;
+    const QList<ForwardSpec> forwards = manager->forwards();
+    for (int i = 0; i < forwards.size(); ++i) {
+        const ForwardSpec &f = forwards.at(i);
+        QVariantMap entry;
+        entry[QStringLiteral("index")] = i;
+        entry[QStringLiteral("type")] = typeText(f.type);
+        entry[QStringLiteral("bindAddress")] = f.bindAddress;
+        entry[QStringLiteral("bindPort")] = f.bindPort;
+        entry[QStringLiteral("target")] = f.type == ForwardSpec::Type::Dynamic
+            ? QString()
+            : QStringLiteral("%1:%2").arg(f.targetHost).arg(f.targetPort);
+        entry[QStringLiteral("active")] = manager->isActive(i);
+        entry[QStringLiteral("status")] = manager->statusText(i);
+        result.append(entry);
+    }
+    return result;
+}
+
+bool MainWindow::removeForwardFromTab(int index, int forwardIndex, QString *errorMessage)
+{
+    QString resolveError;
+    PortForwardManager *manager = forwardManagerForTab(m_tabWidget, index, &resolveError);
+    if (!manager) {
+        if (errorMessage) *errorMessage = resolveError;
+        return false;
+    }
+    if (forwardIndex < 0 || forwardIndex >= manager->count()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("forward index out of range");
+        }
+        return false;
+    }
+    manager->removeForward(forwardIndex);
+    return true;
+}
+
+// B5-2: AgentPolicy consent dialog — the same show()/finished/30 s-timer
+// pattern as sudoAsync (never a nested event loop: the HTTP request stays
+// pending while the dialog is up, and the GUI keeps serving).
+void MainWindow::confirmPolicyAsync(int index, const QString &operation,
+                                    const QString &detail,
+                                    const AgentTabsInterface::PolicyCallback &cb)
+{
+    using Answer = AgentTabsInterface::PolicyAnswer;
+
+    if (index < 0 || index >= m_tabWidget->count()) {
+        Answer a;
+        a.reason = QStringLiteral("unknown_tab");
+        cb(a);
+        return;
+    }
+    auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(index));
+    if (!tab) {
+        Answer a;
+        a.reason = QStringLiteral("unknown_tab");
+        cb(a);
+        return;
+    }
+
+    if (isMinimized()) {
+        showNormal();
+    }
+    raise();
+    activateWindow();
+    QApplication::alert(this);
+
+    const QString identity = AgentSudoAuth::identityFor(tab->config());
+    auto *box = new QMessageBox(this);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->setWindowTitle(tr("Agent Request"));
+    box->setIcon(QMessageBox::Question);
+    box->setText(tr("An AI agent requests %1 on \"%2\":")
+                     .arg(operation, m_tabWidget->tabText(index)));
+    box->setInformativeText(tr("Allow it? \"Always\" remembers this host in "
+                               "agent/policyRules; \"This session\" lasts until "
+                               "the app closes. Auto-closes in 30 seconds."));
+    box->setDetailedText(detail);
+    QPushButton *onceButton = box->addButton(tr("This session"), QMessageBox::YesRole);
+    QPushButton *alwaysButton = nullptr;
+    if (!identity.isEmpty()) {
+        alwaysButton = box->addButton(tr("Always"), QMessageBox::AcceptRole);
+    }
+    box->addButton(QMessageBox::No);
+    box->setDefaultButton(QMessageBox::No);
+    box->setWindowFlags(box->windowFlags() | Qt::WindowStaysOnTopHint);
+
+    QPointer<QMessageBox> guard(box);
+    auto *autoReject = new QTimer(box);
+    autoReject->setSingleShot(true);
+    connect(autoReject, &QTimer::timeout, box, [guard]() {
+        if (guard) {
+            guard->setProperty("hsshTimedOut", true);
+            guard->reject();
+        }
+    });
+    connect(box, &QMessageBox::finished, this, [guard, onceButton, alwaysButton, cb](int) {
+        if (!guard) {
+            return;
+        }
+        QAbstractButton *clicked = guard->clickedButton();
+        Answer a;
+        if (clicked == onceButton) {
+            a.allowed = true;
+        } else if (clicked == alwaysButton) {
+            a.allowed = true;
+            a.always = true;
+        } else {
+            a.reason = guard->property("hsshTimedOut").toBool()
+                           ? QStringLiteral("timeout")
+                           : QStringLiteral("user_rejected");
+        }
+        cb(a);
+    });
+    autoReject->start(30000);
+    box->show();
 }
 
 bool MainWindow::closeTab(int index)

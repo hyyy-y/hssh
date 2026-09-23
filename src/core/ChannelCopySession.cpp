@@ -208,12 +208,17 @@ void ChannelCopySession::download(const QString &remotePath, const QString &loca
     }, Qt::QueuedConnection);
 }
 
+void ChannelCopySession::setHostKeyVerifier(const KeyStore::HostKeyVerifier &verifier)
+{
+    m_hostKeyVerifier = verifier;
+}
+
 void ChannelCopySession::doConnect()
 {
     QString error;
     // Bulk transfer: post-connect timeout must stay 0 (a timed-out blocking
     // write is a silent short write — the 2026-08-19 corruption lesson).
-    m_ssh = sshConnectAndAuthenticate(m_config, &error);
+    m_ssh = sshConnectAndAuthenticate(m_config, &error, 0, m_hostKeyVerifier);
     if (!m_ssh) {
         emit errorOccurred(error);
     }
@@ -225,7 +230,7 @@ bool ChannelCopySession::reconnectIfDead(QString *error)
         return true;
     }
     sshDisconnectAndFree(m_ssh);
-    m_ssh = sshConnectAndAuthenticate(m_config, error);
+    m_ssh = sshConnectAndAuthenticate(m_config, error, 0, m_hostKeyVerifier);
     return m_ssh != nullptr;
 }
 

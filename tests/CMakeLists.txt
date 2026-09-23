@@ -13,11 +13,23 @@ set(COMMON_SOURCES
     ../src/core/KeyStore.cpp
     ../src/app/dialogs/KeyManagerDialog.cpp
     ../src/app/dialogs/SessionLogViewer.cpp
+    ../src/app/dialogs/RemoteSearchDialog.cpp
+    ../src/app/dialogs/PermissionsDialog.cpp
+    ../src/app/dialogs/ProcessDialog.cpp
+    ../src/app/dialogs/DockerDialog.cpp
+    ../src/app/dialogs/NetworkToolsDialog.cpp
+    ../src/app/dialogs/ServerTransferDialog.cpp
+    ../src/app/GuiHostKeyPrompt.cpp
+    ../src/app/RemoteEditManager.cpp
+    ../src/app/TransferRegistry.cpp
+    ../src/app/widgets/SftpWidget.cpp
     ../src/app/widgets/CommandPalette.cpp
     ../src/app/widgets/TerminalOutlineWidget.cpp
     ../src/core/PortForward.cpp
     ../src/core/SftpSession.cpp
     ../src/core/ChannelCopySession.cpp
+    ../src/core/RemoteCommandChannel.cpp
+    ../src/app/ServerMonitor.cpp
     ../src/core/TransferSession.h
     ../src/core/SshConnect.cpp
     ../src/core/SshSession.cpp
@@ -131,6 +143,30 @@ target_link_libraries(test_sessionlog PRIVATE ${COMMON_LIBS})
 add_test(NAME test_sessionlog COMMAND test_sessionlog)
 set_tests_properties(test_sessionlog PROPERTIES ENVIRONMENT "${TEST_ENV}")
 
+add_executable(test_remoteedit test_remoteedit.cpp ${COMMON_SOURCES})
+target_include_directories(test_remoteedit PRIVATE ${COMMON_INCLUDES})
+target_link_libraries(test_remoteedit PRIVATE ${COMMON_LIBS})
+add_test(NAME test_remoteedit COMMAND test_remoteedit)
+set_tests_properties(test_remoteedit PROPERTIES ENVIRONMENT "${TEST_ENV}")
+
+add_executable(test_remotesearch test_remotesearch.cpp ${COMMON_SOURCES})
+target_include_directories(test_remotesearch PRIVATE ${COMMON_INCLUDES})
+target_link_libraries(test_remotesearch PRIVATE ${COMMON_LIBS})
+add_test(NAME test_remotesearch COMMAND test_remotesearch)
+set_tests_properties(test_remotesearch PROPERTIES ENVIRONMENT "${TEST_ENV}")
+
+add_executable(test_permissions test_permissions.cpp ${COMMON_SOURCES})
+target_include_directories(test_permissions PRIVATE ${COMMON_INCLUDES})
+target_link_libraries(test_permissions PRIVATE ${COMMON_LIBS})
+add_test(NAME test_permissions COMMAND test_permissions)
+set_tests_properties(test_permissions PROPERTIES ENVIRONMENT "${TEST_ENV}")
+
+add_executable(test_sysmon test_sysmon.cpp ${COMMON_SOURCES})
+target_include_directories(test_sysmon PRIVATE ${COMMON_INCLUDES})
+target_link_libraries(test_sysmon PRIVATE ${COMMON_LIBS})
+add_test(NAME test_sysmon COMMAND test_sysmon)
+set_tests_properties(test_sysmon PROPERTIES ENVIRONMENT "${TEST_ENV}")
+
 add_executable(test_session_model test_session_model.cpp ${COMMON_SOURCES})
 target_include_directories(test_session_model PRIVATE ${COMMON_INCLUDES})
 target_link_libraries(test_session_model PRIVATE ${COMMON_LIBS})
@@ -170,6 +206,8 @@ set_tests_properties(test_textdiff PROPERTIES ENVIRONMENT "${TEST_ENV}")
 set(AGENT_SOURCES
     ../src/agent/AgentAudit.cpp
     ../src/agent/AgentHttpServer.cpp
+    ../src/agent/AgentMcpServer.cpp
+    ../src/agent/AgentPolicy.cpp
 )
 
 add_executable(test_agent_http test_agent_http.cpp ${COMMON_SOURCES} ${AGENT_SOURCES})

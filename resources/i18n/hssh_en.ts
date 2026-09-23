@@ -2,6 +2,44 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="en" sourcelanguage="en">
 <context>
+    <name>QObject</name>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="329"/>
+        <source>Key Store</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="330"/>
+        <source>The key store is empty. Generate or import a key via Tools &gt; Key Manager first.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="336"/>
+        <source>Select Key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="340"/>
+        <source>Name</source>
+        <translation type="unfinished">Name</translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="340"/>
+        <source>Type</source>
+        <translation type="unfinished">Type</translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="341"/>
+        <source>SHA256 Fingerprint</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="352"/>
+        <source>encrypted</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>TransportFactory</name>
     <message>
         <location filename="../../src/core/transport/TransportFactory.cpp" line="22"/>
@@ -20,172 +58,217 @@
     </message>
 </context>
 <context>
-    <name>hssh::AgentSessionRegistry</name>
+    <name>hssh::AppearanceDialog</name>
     <message>
-        <source>Invalid session configuration</source>
-        <translation type="vanished">Invalid session configuration</translation>
+        <location filename="../../src/app/dialogs/AppearanceDialog.cpp" line="20"/>
+        <source>Appearance</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Unknown session: %1</source>
-        <translation type="vanished">Unknown session: %1</translation>
+        <location filename="../../src/app/dialogs/AppearanceDialog.cpp" line="27"/>
+        <source>Terminal &amp;font:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/AppearanceDialog.cpp" line="31"/>
+        <source>Font &amp;size:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/AppearanceDialog.cpp" line="34"/>
+        <source>Dark</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/AppearanceDialog.cpp" line="35"/>
+        <source>Light</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/AppearanceDialog.cpp" line="36"/>
+        <source>High contrast</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/AppearanceDialog.cpp" line="37"/>
+        <source>&amp;Theme:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/AppearanceDialog.cpp" line="41"/>
+        <source>Window opacity — below 100% the whole window (including text) becomes translucent</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/AppearanceDialog.cpp" line="43"/>
+        <source>Window &amp;opacity:</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>hssh::ChannelCopySession</name>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="238"/>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="265"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="243"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="270"/>
         <source>Connection lost and reconnect failed: %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="307"/>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="615"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="312"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="623"/>
         <source>Cannot read %1</source>
         <translation type="unfinished">Cannot read %1</translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="341"/>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="670"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="346"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="678"/>
         <source>Failed to read %1: %2</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="361"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="366"/>
         <source>Channel write stalled during upload</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="392"/>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="528"/>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="689"/>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="853"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="397"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="533"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="697"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="863"/>
         <source>Cancelled</source>
         <translation type="unfinished">Cancelled</translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="398"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="403"/>
         <source>Remote &apos;base64 -d&apos; failed (exit %1): %2</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="408"/>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="701"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="413"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="709"/>
         <source>Upload verification failed: remote content differs (local md5 %1, remote md5 %2)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="418"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="423"/>
         <source>uploaded via base64, md5 %1; verification unavailable (no remote md5sum)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="420"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="425"/>
         <source>uploaded via base64, md5 verified: %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="424"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="429"/>
         <source>uploaded via base64 (verification off)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="457"/>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="782"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="462"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="792"/>
         <source>Cannot write to %1</source>
         <translation type="unfinished">Cannot write to %1</translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="494"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="499"/>
         <source>Garbage in base64 stream from remote</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="500"/>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="540"/>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="804"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="505"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="545"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="814"/>
         <source>Failed to write to %1</source>
         <translation type="unfinished">Failed to write to %1</translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="534"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="539"/>
         <source>Truncated base64 stream from remote</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="547"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="552"/>
         <source>Remote &apos;base64&apos; failed (exit %1): %2</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="558"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="563"/>
         <source>Download verification failed: local content differs (remote md5 %1, local md5 %2) — the remote file may be rewritten concurrently</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="569"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="574"/>
         <source>downloaded via base64, md5 %1; verification unavailable (no remote md5sum)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="571"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="576"/>
         <source>downloaded via base64, md5 verified: %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="575"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="580"/>
         <source>downloaded via base64 (verification off)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="581"/>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="883"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="589"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="895"/>
         <source>Downloaded to %1 but failed to finalize %2</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="711"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="719"/>
         <source>uploaded via scp, md5 %1; verification unavailable (no remote md5sum)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="713"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="721"/>
         <source>uploaded via scp, md5 verified: %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="717"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="725"/>
         <source>uploaded via scp (verification off)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="822"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="832"/>
         <source>Remote path is a directory; scp transfer supports single files only</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="834"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="844"/>
         <source>Remote file not found: %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="861"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="871"/>
         <source>Download verification failed: local content differs (remote md5 %1, local md5 %2)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="871"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="881"/>
         <source>downloaded via scp, md5 %1; verification unavailable (no remote md5sum)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="873"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="883"/>
         <source>downloaded via scp, md5 verified: %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/ChannelCopySession.cpp" line="877"/>
+        <location filename="../../src/core/ChannelCopySession.cpp" line="887"/>
         <source>downloaded via scp (verification off)</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>hssh::CommandPalette</name>
+    <message>
+        <location filename="../../src/app/widgets/CommandPalette.cpp" line="33"/>
+        <source>Type a command, session or tab...</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -464,10 +547,6 @@
         <translation>Local folder</translation>
     </message>
     <message>
-        <source>📁</source>
-        <translation type="vanished">📁</translation>
-    </message>
-    <message>
         <location filename="../../src/app/widgets/FileCompareWidget.cpp" line="231"/>
         <location filename="../../src/app/widgets/FileCompareWidget.cpp" line="286"/>
         <source>Choose a local folder</source>
@@ -586,10 +665,6 @@
         <translation>Enter both a local folder and a remote folder.</translation>
     </message>
     <message>
-        <source>Scanning remote directory…</source>
-        <translation type="vanished">Scanning remote directory…</translation>
-    </message>
-    <message>
         <location filename="../../src/app/widgets/FileCompareWidget.cpp" line="1211"/>
         <source>Diff download failed.</source>
         <translation>Diff download failed.</translation>
@@ -630,6 +705,24 @@
     </message>
 </context>
 <context>
+    <name>hssh::FloatingTabWindow</name>
+    <message>
+        <location filename="../../src/app/FloatingTabWindow.cpp" line="31"/>
+        <source>Dock to Main Window</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/FloatingTabWindow.cpp" line="42"/>
+        <source>Pinned Tab</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/FloatingTabWindow.cpp" line="43"/>
+        <source>This tab is pinned — unpin it before closing.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>hssh::ForwardSpec</name>
     <message>
         <location filename="../../src/core/PortForward.cpp" line="24"/>
@@ -645,6 +738,296 @@
         <location filename="../../src/core/PortForward.cpp" line="32"/>
         <source>SOCKS5 %1 (dynamic)</source>
         <translation>SOCKS5 %1 (dynamic)</translation>
+    </message>
+</context>
+<context>
+    <name>hssh::ImportSshConfigDialog</name>
+    <message>
+        <location filename="../../src/app/dialogs/ImportSshConfigDialog.cpp" line="137"/>
+        <source>Import OpenSSH config</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/ImportSshConfigDialog.cpp" line="146"/>
+        <source>Browse...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/ImportSshConfigDialog.cpp" line="152"/>
+        <source>Hosts parsed from the config. Wildcard patterns are skipped; ProxyJump is stored but not used until jump-host support lands.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/ImportSshConfigDialog.cpp" line="161"/>
+        <source>Import</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/ImportSshConfigDialog.cpp" line="161"/>
+        <source>Name</source>
+        <translation type="unfinished">Name</translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/ImportSshConfigDialog.cpp" line="161"/>
+        <source>Host</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/ImportSshConfigDialog.cpp" line="161"/>
+        <source>Port</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/ImportSshConfigDialog.cpp" line="161"/>
+        <source>User</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/ImportSshConfigDialog.cpp" line="181"/>
+        <source>OpenSSH config</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>hssh::KbdintPromptDialog</name>
+    <message>
+        <location filename="../../src/app/dialogs/KbdintPromptDialog.cpp" line="17"/>
+        <source>Two-Factor Authentication</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KbdintPromptDialog.cpp" line="39"/>
+        <source>Remember answers for this session</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>hssh::KeyManagerDialog</name>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="33"/>
+        <source>encrypted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="41"/>
+        <source>Key Manager</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="48"/>
+        <source>Name</source>
+        <translation type="unfinished">Name</translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="48"/>
+        <source>Type</source>
+        <translation type="unfinished">Type</translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="48"/>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="76"/>
+        <source>SHA256 Fingerprint</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="59"/>
+        <source>&amp;Generate...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="60"/>
+        <source>&amp;Import...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="61"/>
+        <source>&amp;Export Public Key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="62"/>
+        <source>&amp;Delete</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="71"/>
+        <source>Known Hosts</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="76"/>
+        <source>Host</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="76"/>
+        <source>Key Type</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="84"/>
+        <source>Remove &amp;Host</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="114"/>
+        <source>unlock to show</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="137"/>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="172"/>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="183"/>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="188"/>
+        <source>Generate Key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="142"/>
+        <source>Name:</source>
+        <translation type="unfinished">Name:</translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="145"/>
+        <source>Ed25519 (recommended)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="146"/>
+        <source>Type:</source>
+        <translation type="unfinished">Type:</translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="150"/>
+        <source>Passphrase (optional):</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="153"/>
+        <source>Confirm passphrase:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="156"/>
+        <source>Keys are stored in the hssh key store. Use &quot;Export Public Key&quot; to copy the authorized_keys line for the remote host.
+
+Only Ed25519 can be generated here (crypto backend limitation); RSA/ECDSA keys can be imported via &quot;Import...&quot;.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="172"/>
+        <source>Passphrases do not match.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="184"/>
+        <source>Key generation failed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="189"/>
+        <source>Key generated:
+%1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="195"/>
+        <source>Import Private Key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="196"/>
+        <source>Private key files (id_* *.pem *.key);;All files (*)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="206"/>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="211"/>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="216"/>
+        <source>Import Key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="207"/>
+        <source>Key imported:
+%1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="212"/>
+        <source>Key import failed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="217"/>
+        <source>The key is passphrase-protected. Passphrase:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="235"/>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="245"/>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="252"/>
+        <source>Export Public Key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="236"/>
+        <source>Passphrase for %1:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="246"/>
+        <source>Export failed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="251"/>
+        <source>(unlock to show)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="253"/>
+        <source>Copied to the clipboard:
+
+%1
+
+Fingerprint: %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="265"/>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="273"/>
+        <source>Delete Key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="266"/>
+        <source>Delete %1?
+
+Sessions using it will need to be updated.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="274"/>
+        <source>Delete failed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="302"/>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="318"/>
+        <source>Remove Known Host</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="303"/>
+        <source>Remove the stored host key for %1?
+The next connection will ask for confirmation again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/KeyManagerDialog.cpp" line="319"/>
+        <source>Remove failed.</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -728,225 +1111,216 @@
 <context>
     <name>hssh::MainWindow</name>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="160"/>
+        <location filename="../../src/app/MainWindow.cpp" line="174"/>
         <source>&amp;File</source>
         <translation>&amp;File</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="161"/>
+        <location filename="../../src/app/MainWindow.cpp" line="175"/>
         <source>&amp;New Session</source>
         <translation>&amp;New Session</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="165"/>
+        <location filename="../../src/app/MainWindow.cpp" line="179"/>
         <source>&amp;Connect</source>
         <translation>&amp;Connect</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="165"/>
+        <location filename="../../src/app/MainWindow.cpp" line="179"/>
         <source>Ctrl+Shift+C</source>
         <translation>Ctrl+Shift+C</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="166"/>
+        <location filename="../../src/app/MainWindow.cpp" line="180"/>
         <source>&amp;Disconnect</source>
         <translation>&amp;Disconnect</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="168"/>
+        <location filename="../../src/app/MainWindow.cpp" line="182"/>
         <source>Recent Sessions</source>
         <translation>Recent Sessions</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="170"/>
+        <location filename="../../src/app/MainWindow.cpp" line="184"/>
         <source>&amp;Import Sessions...</source>
         <translation>&amp;Import Sessions...</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="172"/>
+        <location filename="../../src/app/MainWindow.cpp" line="186"/>
         <source>&amp;Export Sessions...</source>
         <translation>&amp;Export Sessions...</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="174"/>
+        <location filename="../../src/app/MainWindow.cpp" line="188"/>
         <source>E&amp;xit</source>
         <translation>E&amp;xit</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="177"/>
+        <location filename="../../src/app/MainWindow.cpp" line="191"/>
         <source>&amp;View</source>
         <translation>&amp;View</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="185"/>
+        <location filename="../../src/app/MainWindow.cpp" line="201"/>
         <source>Focus Mode</source>
         <translation>Focus Mode</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="185"/>
+        <location filename="../../src/app/MainWindow.cpp" line="201"/>
         <source>F11</source>
         <translation>F11</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="195"/>
+        <location filename="../../src/app/MainWindow.cpp" line="211"/>
         <source>&amp;Port Forwarding...</source>
         <translation>&amp;Port Forwarding...</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="196"/>
+        <location filename="../../src/app/MainWindow.cpp" line="212"/>
         <source>Send Command to All Terminals...</source>
         <translation>Send Command to All Terminals...</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="204"/>
+        <location filename="../../src/app/MainWindow.cpp" line="250"/>
         <source>Set Lock Password...</source>
         <translation>Set Lock Password...</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="205"/>
-        <location filename="../../src/app/MainWindow.cpp" line="1668"/>
+        <location filename="../../src/app/MainWindow.cpp" line="251"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2435"/>
         <source>Lock Screen</source>
         <translation>Lock Screen</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="205"/>
+        <location filename="../../src/app/MainWindow.cpp" line="251"/>
         <source>Ctrl+Alt+L</source>
         <translation>Ctrl+Alt+L</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="207"/>
+        <location filename="../../src/app/MainWindow.cpp" line="253"/>
         <source>Set Master Password...</source>
         <translation>Set Master Password...</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="208"/>
-        <location filename="../../src/app/MainWindow.cpp" line="1761"/>
+        <location filename="../../src/app/MainWindow.cpp" line="254"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2528"/>
         <source>Disable Master Password</source>
         <translation>Disable Master Password</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="211"/>
+        <location filename="../../src/app/MainWindow.cpp" line="257"/>
         <source>Auto-start Agent with GUI</source>
         <translation>Auto-start Agent with GUI</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="318"/>
+        <location filename="../../src/app/MainWindow.cpp" line="407"/>
         <source>Session Manager</source>
         <translation>Session Manager</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="326"/>
+        <location filename="../../src/app/MainWindow.cpp" line="415"/>
         <source>File Manager</source>
         <translation>File Manager</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="182"/>
+        <location filename="../../src/app/MainWindow.cpp" line="198"/>
         <source>Full Screen</source>
         <translation>Full Screen</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="162"/>
+        <location filename="../../src/app/MainWindow.cpp" line="176"/>
         <source>New &amp;Local Terminal</source>
         <translation>New &amp;Local Terminal</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="162"/>
+        <location filename="../../src/app/MainWindow.cpp" line="176"/>
         <source>Ctrl+Shift+T</source>
         <translation>Ctrl+Shift+T</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="187"/>
+        <location filename="../../src/app/MainWindow.cpp" line="203"/>
         <source>Reset Layout</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="194"/>
+        <location filename="../../src/app/MainWindow.cpp" line="210"/>
         <source>&amp;Tools</source>
         <translation>&amp;Tools</translation>
     </message>
     <message>
-        <source>&amp;Settings</source>
-        <translation type="vanished">&amp;Settings</translation>
-    </message>
-    <message>
-        <location filename="../../src/app/MainWindow.cpp" line="202"/>
-        <source>&amp;Key Manager</source>
-        <translation>&amp;Key Manager</translation>
-    </message>
-    <message>
-        <location filename="../../src/app/MainWindow.cpp" line="210"/>
-        <location filename="../../src/app/MainWindow.cpp" line="1060"/>
+        <location filename="../../src/app/MainWindow.cpp" line="256"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1417"/>
         <source>Start Agent</source>
         <translation>Start Agent</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="219"/>
+        <location filename="../../src/app/MainWindow.cpp" line="265"/>
         <source>&amp;Help</source>
         <translation>&amp;Help</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="220"/>
+        <location filename="../../src/app/MainWindow.cpp" line="266"/>
         <source>&amp;About</source>
         <translation>&amp;About</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="222"/>
+        <location filename="../../src/app/MainWindow.cpp" line="268"/>
         <source>About hssh</source>
         <translation>About hssh</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="246"/>
+        <location filename="../../src/app/MainWindow.cpp" line="292"/>
         <source>Main Toolbar</source>
         <translation>Main Toolbar</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="249"/>
+        <location filename="../../src/app/MainWindow.cpp" line="295"/>
         <source>New</source>
         <translation>New</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="250"/>
-        <location filename="../../src/app/MainWindow.cpp" line="937"/>
+        <location filename="../../src/app/MainWindow.cpp" line="296"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1294"/>
         <source>Connect</source>
         <translation>Connect</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="251"/>
+        <location filename="../../src/app/MainWindow.cpp" line="297"/>
         <source>Disconnect</source>
         <translation>Disconnect</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="265"/>
+        <location filename="../../src/app/MainWindow.cpp" line="343"/>
         <source>Local</source>
         <translation>Local</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="270"/>
+        <location filename="../../src/app/MainWindow.cpp" line="348"/>
         <source>Default Terminal</source>
         <translation>Default Terminal</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="285"/>
+        <location filename="../../src/app/MainWindow.cpp" line="363"/>
         <source>SFTP</source>
         <translation>SFTP</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="286"/>
+        <location filename="../../src/app/MainWindow.cpp" line="364"/>
         <source>Compare</source>
         <translation>Compare</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="287"/>
+        <location filename="../../src/app/MainWindow.cpp" line="365"/>
         <source>Settings</source>
         <translation>Settings</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="335"/>
+        <location filename="../../src/app/MainWindow.cpp" line="424"/>
         <source>Transfers</source>
         <translation>Transfers</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="398"/>
+        <location filename="../../src/app/MainWindow.cpp" line="531"/>
         <source>Welcome to hssh
 
 A fully open-source GUI SSH client.
@@ -957,504 +1331,679 @@ A fully open-source GUI SSH client.
 Use File &gt; New Session to connect to a remote host.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="402"/>
+        <location filename="../../src/app/MainWindow.cpp" line="535"/>
         <source>Welcome</source>
         <translation>Welcome</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="416"/>
+        <location filename="../../src/app/MainWindow.cpp" line="549"/>
         <source>Ready</source>
         <translation>Ready</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="429"/>
+        <location filename="../../src/app/MainWindow.cpp" line="562"/>
         <source>SSH · %1</source>
         <translation>SSH · %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="430"/>
+        <location filename="../../src/app/MainWindow.cpp" line="563"/>
         <source>Local · %1</source>
         <translation>Local · %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="446"/>
+        <location filename="../../src/app/MainWindow.cpp" line="579"/>
         <source>Failed to open session database: %1</source>
         <translation>Failed to open session database: %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="466"/>
-        <location filename="../../src/app/MainWindow.cpp" line="496"/>
-        <location filename="../../src/app/MainWindow.cpp" line="525"/>
-        <location filename="../../src/app/MainWindow.cpp" line="555"/>
-        <location filename="../../src/app/MainWindow.cpp" line="824"/>
-        <location filename="../../src/app/MainWindow.cpp" line="842"/>
-        <location filename="../../src/app/MainWindow.cpp" line="869"/>
-        <location filename="../../src/app/MainWindow.cpp" line="891"/>
+        <location filename="../../src/app/MainWindow.cpp" line="599"/>
+        <location filename="../../src/app/MainWindow.cpp" line="629"/>
+        <location filename="../../src/app/MainWindow.cpp" line="658"/>
+        <location filename="../../src/app/MainWindow.cpp" line="688"/>
+        <location filename="../../src/app/MainWindow.cpp" line="709"/>
+        <location filename="../../src/app/MainWindow.cpp" line="749"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1181"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1199"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1226"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1248"/>
         <source>Error</source>
         <translation>Error</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="466"/>
-        <location filename="../../src/app/MainWindow.cpp" line="525"/>
-        <location filename="../../src/app/MainWindow.cpp" line="556"/>
+        <location filename="../../src/app/MainWindow.cpp" line="599"/>
+        <location filename="../../src/app/MainWindow.cpp" line="658"/>
+        <location filename="../../src/app/MainWindow.cpp" line="689"/>
+        <location filename="../../src/app/MainWindow.cpp" line="710"/>
+        <location filename="../../src/app/MainWindow.cpp" line="750"/>
         <source>Failed to save session: %1</source>
         <translation>Failed to save session: %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="776"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1133"/>
         <source>%1×%2</source>
         <translation>%1×%2</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="517"/>
+        <location filename="../../src/app/MainWindow.cpp" line="650"/>
         <source>Edit Session</source>
         <translation>Edit Session</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="171"/>
+        <location filename="../../src/app/MainWindow.cpp" line="185"/>
         <source>Import Open&amp;SSH config...</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="197"/>
+        <location filename="../../src/app/MainWindow.cpp" line="214"/>
+        <source>Server-to-Server Transfer...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="235"/>
         <source>&amp;Appearance...</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="201"/>
+        <location filename="../../src/app/MainWindow.cpp" line="239"/>
         <source>&amp;Settings...</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="257"/>
+        <location filename="../../src/app/MainWindow.cpp" line="240"/>
+        <source>&amp;Key Manager...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="245"/>
+        <source>Session &amp;Log Viewer...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="301"/>
+        <source>Free Type</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="312"/>
+        <source>Free Type Mode</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="313"/>
+        <source>Keyboard input will be sent to %1 other SSH tab(s) at the same time.
+Beware of vim, sudo and password prompts in mirrored tabs. Continue?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="325"/>
+        <source>Free Type ON — input is mirrored to every other SSH tab</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="326"/>
+        <source>Free Type OFF</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="335"/>
         <source>Quick connect: user@host[:port]</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="376"/>
+        <location filename="../../src/app/MainWindow.cpp" line="431"/>
+        <source>Outline</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="445"/>
+        <source>Server Monitor</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="499"/>
+        <source>Ctrl+Shift+P</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="509"/>
         <source>Tab &apos;%1&apos; is pinned — unpin it before closing.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="497"/>
+        <location filename="../../src/app/MainWindow.cpp" line="630"/>
         <source>Failed to save session &apos;%1&apos;: %2</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="505"/>
+        <location filename="../../src/app/MainWindow.cpp" line="638"/>
         <source>Imported %1 session(s) from ssh config</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="549"/>
+        <location filename="../../src/app/MainWindow.cpp" line="682"/>
         <source>Duplicate Session</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="590"/>
+        <location filename="../../src/app/MainWindow.cpp" line="727"/>
+        <source>Edit Tags</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="727"/>
+        <source>Tags for &apos;%1&apos; (comma separated):</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="754"/>
+        <source>Tags updated for &apos;%1&apos;</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="784"/>
         <source>Quick connect: expected user@host[:port]</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="603"/>
+        <location filename="../../src/app/MainWindow.cpp" line="797"/>
         <source>Quick Connect</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="604"/>
+        <location filename="../../src/app/MainWindow.cpp" line="798"/>
         <source>Password for %1@%2:%3 (leave empty for key auth):</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="616"/>
+        <location filename="../../src/app/MainWindow.cpp" line="810"/>
         <source>Quick connect: invalid target</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="620"/>
+        <location filename="../../src/app/MainWindow.cpp" line="814"/>
         <source>Connecting to %1@%2:%3 ...</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="638"/>
+        <location filename="../../src/app/MainWindow.cpp" line="832"/>
         <source>Rename</source>
         <translation type="unfinished">Rename</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="641"/>
+        <location filename="../../src/app/MainWindow.cpp" line="835"/>
         <source>Rename Tab</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="641"/>
+        <location filename="../../src/app/MainWindow.cpp" line="835"/>
         <source>Tab title:</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="647"/>
+        <location filename="../../src/app/MainWindow.cpp" line="842"/>
+        <source>Detach to Window</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="845"/>
         <source>Color</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="659"/>
+        <location filename="../../src/app/MainWindow.cpp" line="857"/>
         <source>No color</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="679"/>
+        <location filename="../../src/app/MainWindow.cpp" line="877"/>
         <source>Clone Tab</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="687"/>
+        <location filename="../../src/app/MainWindow.cpp" line="884"/>
+        <source>ZMODEM Send File...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="885"/>
+        <source>Send via ZMODEM</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="889"/>
+        <source>Cannot start ZMODEM send (a transfer is active, or the file is unreadable/empty)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="896"/>
+        <source>View Session Log...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="904"/>
+        <source>Process List...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="911"/>
+        <source>Network Tools...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="915"/>
+        <source>Docker...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="919"/>
+        <source>Scheduled Tasks...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="925"/>
         <source>Sync Input</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="696"/>
+        <location filename="../../src/app/MainWindow.cpp" line="934"/>
         <source>Sync input ON for &apos;%1&apos; — typing is mirrored to %2 other tab(s)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="699"/>
+        <location filename="../../src/app/MainWindow.cpp" line="937"/>
         <source>Sync input OFF for &apos;%1&apos;</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="706"/>
+        <location filename="../../src/app/MainWindow.cpp" line="944"/>
         <source>Close Other Tabs</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="748"/>
+        <location filename="../../src/app/MainWindow.cpp" line="986"/>
         <source>Pinned &apos;%1&apos; (protected from close)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="816"/>
-        <location filename="../../src/app/MainWindow.cpp" line="882"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1035"/>
+        <source>Tab &apos;%1&apos; is pinned — unpin it before detaching.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="1051"/>
+        <source>&apos;%1&apos; detached to its own window</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="1080"/>
+        <source>&apos;%1&apos; docked back</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="1173"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1239"/>
         <source>Confirm</source>
         <translation>Confirm</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="817"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1174"/>
         <source>Remove session &apos;%1&apos;?</source>
         <translation>Remove session &apos;%1&apos;?</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="824"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1181"/>
         <source>Failed to remove session: %1</source>
         <translation>Failed to remove session: %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="834"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1191"/>
         <source>New Folder</source>
         <translation>New Folder</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="842"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1199"/>
         <source>Failed to save folder: %1</source>
         <translation>Failed to save folder: %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="861"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1218"/>
         <source>Rename Folder</source>
         <translation>Rename Folder</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="869"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1226"/>
         <source>Failed to rename folder: %1</source>
         <translation>Failed to rename folder: %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="883"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1240"/>
         <source>Remove this folder and all its sessions?</source>
         <translation>Remove this folder and all its sessions?</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="891"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1248"/>
         <source>Failed to remove folder: %1</source>
         <translation>Failed to remove folder: %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="937"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1294"/>
         <source>Please select a session first.</source>
         <translation>Please select a session first.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="949"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1306"/>
         <source>Select a terminal tab to disconnect.</source>
         <translation>Select a terminal tab to disconnect.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="962"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1319"/>
         <source>Select an SSH session tab to open SFTP.</source>
         <translation>Select an SSH session tab to open SFTP.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="984"/>
-        <location filename="../../src/app/MainWindow.cpp" line="1003"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1341"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1360"/>
         <source>Compare: %1</source>
         <translation>Compare: %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="990"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1347"/>
         <source>SFTP: %1</source>
         <translation>SFTP: %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="998"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1355"/>
         <source>Select an SSH session tab to open the compare view.</source>
         <translation>Select an SSH session tab to open the compare view.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1012"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1369"/>
         <source>Select a connected SSH session tab to manage port forwarding.</source>
         <translation>Select a connected SSH session tab to manage port forwarding.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1022"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1379"/>
         <source>Import Sessions</source>
         <translation>Import Sessions</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1023"/>
-        <location filename="../../src/app/MainWindow.cpp" line="1041"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1380"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1398"/>
         <source>hssh sessions (*.json);;All files (*)</source>
         <translation>hssh sessions (*.json);;All files (*)</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1029"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1386"/>
         <source>Import Failed</source>
         <translation>Import Failed</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1030"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1387"/>
         <source>Could not import sessions: %1</source>
         <translation>Could not import sessions: %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1034"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1391"/>
         <source>Sessions imported.</source>
         <translation>Sessions imported.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1039"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1396"/>
         <source>Export Sessions</source>
         <translation>Export Sessions</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1047"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1404"/>
         <source>Export Failed</source>
         <translation>Export Failed</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1048"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1405"/>
         <source>Could not export sessions: %1</source>
         <translation>Could not export sessions: %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1051"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1408"/>
         <source>Sessions exported to %1</source>
         <translation>Sessions exported to %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1061"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1418"/>
         <source>Agent stopped.</source>
         <translation>Agent stopped.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1070"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1427"/>
         <source>Agent accept error on %1: %2</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1076"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1433"/>
         <source>Agent</source>
         <translation>Agent</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1077"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1434"/>
         <source>Failed to start agent: %1
 
 Another hssh instance (or MCP auto-launched GUI) may already own the port — check GET http://127.0.0.1:8222/api/v1/health for its pid.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1283"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1652"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1785"/>
         <source>Allow it? &quot;Always Allow&quot; grants sudo for this machine permanently; plain approval lasts while this tab stays open. This dialog closes automatically in 30 seconds.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1291"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1660"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1793"/>
         <source>Always Allow</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Failed to start agent: %1</source>
-        <translation type="vanished">Failed to start agent: %1</translation>
-    </message>
-    <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1086"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1443"/>
         <source>Stop Agent</source>
         <translation>Stop Agent</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1088"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1445"/>
         <source>Agent listening on %1</source>
         <translation>Agent listening on %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1279"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1648"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1781"/>
         <source>Sudo Confirmation</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1281"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1650"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1783"/>
         <source>An AI agent requests to run this command with sudo in session &quot;%1&quot;:</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1368"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1853"/>
         <source>Unknown tab index: %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1375"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1860"/>
         <source>Tab %1 is not a terminal session</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1510"/>
+        <location filename="../../src/app/MainWindow.cpp" line="1966"/>
+        <source>Command</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="1984"/>
+        <source>Session</source>
+        <translation type="unfinished">Session</translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="2002"/>
+        <source>Go to Tab</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="2194"/>
+        <source>Agent Request</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="2196"/>
+        <source>An AI agent requests %1 on &quot;%2&quot;:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="2198"/>
+        <source>Allow it? &quot;Always&quot; remembers this host in agent/policyRules; &quot;This session&quot; lasts until the app closes. Auto-closes in 30 seconds.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="2202"/>
+        <source>This session</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="2205"/>
+        <source>Always</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/MainWindow.cpp" line="2273"/>
         <source>(no recent sessions)</source>
         <translation>(no recent sessions)</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1525"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2288"/>
         <source>Send Command</source>
         <translation>Send Command</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1526"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2289"/>
         <source>Send this command to every open terminal tab:</source>
         <translation>Send this command to every open terminal tab:</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1533"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2296"/>
         <source>Command sent to %1 terminal(s).</source>
         <translation>Command sent to %1 terminal(s).</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1583"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2350"/>
         <source>Restore Session</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1584"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2351"/>
         <source>Restore the %1 terminal tab(s) that were open last time?</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1649"/>
-        <location filename="../../src/app/MainWindow.cpp" line="1656"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2416"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2423"/>
         <source>Set Lock Password</source>
         <translation>Set Lock Password</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1650"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2417"/>
         <source>Password to unlock the screen:</source>
         <translation>Password to unlock the screen:</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1656"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2423"/>
         <source>Password must not be empty.</source>
         <translation>Password must not be empty.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1661"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2428"/>
         <source>Lock password set.</source>
         <translation>Lock password set.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1669"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2436"/>
         <source>Set a lock password first (Tools &gt; Set Lock Password...).</source>
         <translation>Set a lock password first (Tools &gt; Set Lock Password...).</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1674"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2441"/>
         <source>hssh Locked</source>
         <translation>hssh Locked</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1679"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2446"/>
         <source>&lt;h2&gt;Screen locked&lt;/h2&gt;</source>
         <translation>&lt;h2&gt;Screen locked&lt;/h2&gt;</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1685"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2452"/>
         <source>Enter lock password</source>
         <translation>Enter lock password</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1694"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2461"/>
         <source>Wrong password</source>
         <translation>Wrong password</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1715"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2482"/>
         <source>Master Password</source>
         <translation>Master Password</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1716"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2483"/>
         <source>Stored secrets are locked or corrupted.</source>
         <translation>Stored secrets are locked or corrupted.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1726"/>
-        <location filename="../../src/app/MainWindow.cpp" line="1732"/>
-        <location filename="../../src/app/MainWindow.cpp" line="1739"/>
-        <location filename="../../src/app/MainWindow.cpp" line="1745"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2493"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2499"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2506"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2512"/>
         <source>Set Master Password</source>
         <translation>Set Master Password</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1727"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2494"/>
         <source>New master password:</source>
         <translation>New master password:</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1733"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2500"/>
         <source>Confirm master password:</source>
         <translation>Confirm master password:</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1739"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2506"/>
         <source>Passwords do not match.</source>
         <translation>Passwords do not match.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1745"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2512"/>
         <source>Failed to set the master password.</source>
         <translation>Failed to set the master password.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1751"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2518"/>
         <source>Master password enabled. Secrets are now encrypted with it.</source>
         <translation>Master password enabled. Secrets are now encrypted with it.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1757"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2524"/>
         <source>Master password is not enabled.</source>
         <translation>Master password is not enabled.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1762"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2529"/>
         <source>Disable the master password? Secrets will be re-encrypted with this machine&apos;s key instead.</source>
         <translation>Disable the master password? Secrets will be re-encrypted with this machine&apos;s key instead.</translation>
     </message>
     <message>
-        <location filename="../../src/app/MainWindow.cpp" line="1773"/>
+        <location filename="../../src/app/MainWindow.cpp" line="2540"/>
         <source>Master password disabled.</source>
         <translation>Master password disabled.</translation>
     </message>
@@ -1462,109 +2011,224 @@ Another hssh instance (or MCP auto-launched GUI) may already own the port — ch
 <context>
     <name>hssh::NewSessionDialog</name>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="20"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="23"/>
         <source>New Session</source>
         <translation>New Session</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="54"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="81"/>
         <source>My Server</source>
         <translation>My Server</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="55"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="82"/>
         <source>Name:</source>
         <translation>Name:</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="58"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="85"/>
+        <source>SSH</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="86"/>
+        <source>Serial (COM/tty)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="87"/>
+        <source>Type:</source>
+        <translation type="unfinished">Type:</translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="101"/>
         <source>example.com or 192.168.1.1</source>
         <translation>example.com or 192.168.1.1</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="59"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="102"/>
         <source>Host:</source>
         <translation>Host:</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="64"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="107"/>
         <source>Port:</source>
         <translation>Port:</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="67"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="110"/>
         <source>root</source>
         <translation>root</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="68"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="111"/>
         <source>Username:</source>
         <translation>Username:</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="71"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="114"/>
         <source>Password</source>
         <translation>Password</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="72"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="115"/>
         <source>Public Key</source>
         <translation>Public Key</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="73"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="116"/>
         <source>Keyboard Interactive</source>
         <translation>Keyboard Interactive</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="74"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="117"/>
         <source>SSH Agent</source>
         <translation>SSH Agent</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="75"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="118"/>
         <source>Auth Method:</source>
         <translation>Auth Method:</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="79"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="122"/>
         <source>Password:</source>
         <translation>Password:</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="82"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="129"/>
+        <source>Key Store...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="143"/>
         <source>Private Key Path:</source>
         <translation>Private Key Path:</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="86"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="147"/>
         <source>Key Passphrase:</source>
         <translation>Key Passphrase:</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="90"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="160"/>
+        <source>COM3 / /dev/ttyUSB0</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="162"/>
+        <source>Serial Port:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="169"/>
+        <source>Baud Rate:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="175"/>
         <source>Connection</source>
         <translation>Connection</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="96"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="181"/>
         <source> s</source>
         <translation> s</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="97"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="182"/>
         <source>Disabled</source>
         <translation>Disabled</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="98"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="183"/>
         <source>Keep-alive interval:</source>
         <translation>Keep-alive interval:</translation>
     </message>
     <message>
-        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="100"/>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="185"/>
         <source>Reconnect automatically after a connection drop</source>
         <translation>Reconnect automatically after a connection drop</translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="188"/>
+        <source>Forward local ssh-agent to this host (needs the ssh-agent service)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="194"/>
+        <source>Proxy &amp;&amp; Jump Host</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="198"/>
+        <source>None (direct)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="201"/>
+        <source>Proxy:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="204"/>
+        <source>Proxy Host:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="209"/>
+        <source>Proxy Port:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="212"/>
+        <source>Proxy Username:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="216"/>
+        <source>Proxy Password:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="219"/>
+        <source>empty = direct connection</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="220"/>
+        <source>Jump Host:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="225"/>
+        <source>Jump Port:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="228"/>
+        <source>empty = same as target username</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="229"/>
+        <source>Jump Username:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="233"/>
+        <source>Jump Password:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="236"/>
+        <source>empty = password auth for jump</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/NewSessionDialog.cpp" line="237"/>
+        <source>Jump Key Path:</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -1724,34 +2388,201 @@ Another hssh instance (or MCP auto-launched GUI) may already own the port — ch
     </message>
 </context>
 <context>
+    <name>hssh::SerialShellProcess</name>
+    <message>
+        <location filename="../../src/terminal/SerialShellProcess.cpp" line="91"/>
+        <source>No serial port configured</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/SerialShellProcess.cpp" line="105"/>
+        <source>Cannot open serial port %1 (error %2)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/SerialShellProcess.cpp" line="113"/>
+        <source>Unsupported baud rate %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/SerialShellProcess.cpp" line="129"/>
+        <location filename="../../src/terminal/SerialShellProcess.cpp" line="152"/>
+        <location filename="../../src/terminal/SerialShellProcess.cpp" line="161"/>
+        <source>Cannot configure serial port %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/SerialShellProcess.cpp" line="144"/>
+        <source>Cannot open serial port %1: %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/SerialShellProcess.cpp" line="181"/>
+        <source>Serial port %1 read failed (error %2)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/SerialShellProcess.cpp" line="194"/>
+        <source>Serial port %1 read failed: %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>hssh::SessionLogViewer</name>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="52"/>
+        <source>Session Log Viewer</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="60"/>
+        <source>Show:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="62"/>
+        <source>All time</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="63"/>
+        <source>Today</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="64"/>
+        <source>Last 3 days</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="65"/>
+        <source>Last 7 days</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="66"/>
+        <source>Last 30 days</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="70"/>
+        <source>Refresh</source>
+        <translation type="unfinished">Refresh</translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="73"/>
+        <source>Export...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="97"/>
+        <source>Find in log (Enter = next match)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="297"/>
+        <source>Cannot open %1: %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="308"/>
+        <source>[%1 MB log truncated to the last %2 MB]
+
+</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="359"/>
+        <source>&gt; %1 matches</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="361"/>
+        <source>%1 match(es)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="374"/>
+        <source>%1 / %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="380"/>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="395"/>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="401"/>
+        <source>Export</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="380"/>
+        <source>Select a log file first.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="388"/>
+        <source>Export Log</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="388"/>
+        <source>Text Files (*.txt);;All Files (*)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="396"/>
+        <source>Cannot write %1: %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/dialogs/SessionLogViewer.cpp" line="401"/>
+        <source>Exported to %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>hssh::SessionManagerWidget</name>
     <message>
-        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="71"/>
+        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="106"/>
         <source>Search sessions...</source>
         <translation>Search sessions...</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="140"/>
+        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="178"/>
         <source>New Session</source>
         <translation>New Session</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="143"/>
+        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="181"/>
         <source>New Folder</source>
         <translation>New Folder</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="149"/>
+        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="187"/>
         <source>Edit</source>
         <translation>Edit</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="152"/>
+        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="190"/>
         <source>Duplicate</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="155"/>
+        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="197"/>
+        <source>Remove from Favorites</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="197"/>
+        <source>Add to Favorites</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="201"/>
+        <source>Edit Tags...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SessionManagerWidget.cpp" line="206"/>
         <source>Remove</source>
         <translation>Remove</translation>
     </message>
@@ -1798,6 +2629,44 @@ Another hssh instance (or MCP auto-launched GUI) may already own the port — ch
     </message>
 </context>
 <context>
+    <name>hssh::SessionTab</name>
+    <message>
+        <location filename="../../src/app/SessionTab.cpp" line="159"/>
+        <source>Host Key CHANGED</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/SessionTab.cpp" line="159"/>
+        <source>Unknown Host Key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/SessionTab.cpp" line="161"/>
+        <source>The host key for %1 has CHANGED!
+This could indicate a man-in-the-middle attack, or the server
+was reinstalled. Verify the fingerprint out-of-band before
+continuing.
+
+Key type: %2
+SHA256 fingerprint: %3
+MD5 fingerprint: %4
+
+Accept and replace the stored key?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/SessionTab.cpp" line="167"/>
+        <source>The authenticity of host %1 cannot be established.
+
+Key type: %2
+SHA256 fingerprint: %3
+MD5 fingerprint: %4
+
+Trust this host and store its key?</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>hssh::SettingsDialog</name>
     <message>
         <location filename="../../src/app/dialogs/SettingsDialog.cpp" line="27"/>
@@ -1824,165 +2693,188 @@ Another hssh instance (or MCP auto-launched GUI) may already own the port — ch
 <context>
     <name>hssh::SftpSession</name>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="188"/>
-        <location filename="../../src/core/SftpSession.cpp" line="232"/>
-        <location filename="../../src/core/SftpSession.cpp" line="248"/>
-        <location filename="../../src/core/SftpSession.cpp" line="259"/>
-        <location filename="../../src/core/SftpSession.cpp" line="270"/>
-        <location filename="../../src/core/SftpSession.cpp" line="281"/>
-        <location filename="../../src/core/SftpSession.cpp" line="381"/>
-        <location filename="../../src/core/SftpSession.cpp" line="592"/>
-        <location filename="../../src/core/SftpSession.cpp" line="609"/>
-        <location filename="../../src/core/SftpSession.cpp" line="726"/>
+        <location filename="../../src/core/SftpSession.cpp" line="207"/>
+        <location filename="../../src/core/SftpSession.cpp" line="255"/>
+        <location filename="../../src/core/SftpSession.cpp" line="271"/>
+        <location filename="../../src/core/SftpSession.cpp" line="282"/>
+        <location filename="../../src/core/SftpSession.cpp" line="293"/>
+        <location filename="../../src/core/SftpSession.cpp" line="304"/>
+        <location filename="../../src/core/SftpSession.cpp" line="315"/>
+        <location filename="../../src/core/SftpSession.cpp" line="326"/>
+        <location filename="../../src/core/SftpSession.cpp" line="468"/>
+        <location filename="../../src/core/SftpSession.cpp" line="687"/>
+        <location filename="../../src/core/SftpSession.cpp" line="707"/>
+        <location filename="../../src/core/SftpSession.cpp" line="824"/>
         <source>SFTP session is not connected</source>
         <translation>SFTP session is not connected</translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="194"/>
-        <location filename="../../src/core/SftpSession.cpp" line="541"/>
+        <location filename="../../src/core/SftpSession.cpp" line="213"/>
+        <location filename="../../src/core/SftpSession.cpp" line="631"/>
         <source>Failed to open directory %1: %2</source>
         <translation>Failed to open directory %1: %2</translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="214"/>
-        <location filename="../../src/core/SftpSession.cpp" line="582"/>
+        <location filename="../../src/core/SftpSession.cpp" line="237"/>
+        <location filename="../../src/core/SftpSession.cpp" line="677"/>
         <source>Error while reading directory %1: %2</source>
         <translation>Error while reading directory %1: %2</translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="237"/>
+        <location filename="../../src/core/SftpSession.cpp" line="260"/>
         <source>Failed to resolve path %1: %2</source>
         <translation>Failed to resolve path %1: %2</translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="302"/>
-        <location filename="../../src/core/SftpSession.cpp" line="778"/>
+        <location filename="../../src/core/SftpSession.cpp" line="389"/>
+        <location filename="../../src/core/SftpSession.cpp" line="876"/>
         <source>Failed to seek remote file: %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="413"/>
+        <location filename="../../src/core/SftpSession.cpp" line="503"/>
         <source>Already up to date</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="427"/>
+        <location filename="../../src/core/SftpSession.cpp" line="517"/>
         <source>Already up to date (size match; content verification unavailable)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="435"/>
+        <location filename="../../src/core/SftpSession.cpp" line="525"/>
         <source>Already up to date (md5 verified: %1)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="452"/>
-        <location filename="../../src/core/SftpSession.cpp" line="654"/>
+        <location filename="../../src/core/SftpSession.cpp" line="542"/>
+        <location filename="../../src/core/SftpSession.cpp" line="752"/>
         <source>Cannot write to %1</source>
         <translation>Cannot write to %1</translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="323"/>
+        <location filename="../../src/core/SftpSession.cpp" line="410"/>
         <source>Failed to write to %1</source>
         <translation>Failed to write to %1</translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="466"/>
-        <location filename="../../src/core/SftpSession.cpp" line="619"/>
-        <location filename="../../src/core/SftpSession.cpp" line="678"/>
-        <location filename="../../src/core/SftpSession.cpp" line="854"/>
+        <location filename="../../src/core/SftpSession.cpp" line="338"/>
+        <source>Recursive chmod failed while listing %1: %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SftpSession.cpp" line="346"/>
+        <location filename="../../src/core/SftpSession.cpp" line="556"/>
+        <location filename="../../src/core/SftpSession.cpp" line="717"/>
+        <location filename="../../src/core/SftpSession.cpp" line="776"/>
+        <location filename="../../src/core/SftpSession.cpp" line="952"/>
         <source>Cancelled</source>
         <translation>Cancelled</translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="469"/>
-        <location filename="../../src/core/SftpSession.cpp" line="857"/>
+        <location filename="../../src/core/SftpSession.cpp" line="352"/>
+        <source>%1: %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SftpSession.cpp" line="366"/>
+        <source>%1 entries updated</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SftpSession.cpp" line="369"/>
+        <source>%1 of %2 entries failed (first: %3)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SftpSession.cpp" line="559"/>
+        <location filename="../../src/core/SftpSession.cpp" line="955"/>
         <source>%1 (%2 of %3 bytes transferred; retry resumes from the partial file)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="484"/>
+        <location filename="../../src/core/SftpSession.cpp" line="574"/>
         <source>Remote file changed during download (size %1 -&gt; %2); it may be rewritten concurrently — retry</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="493"/>
+        <location filename="../../src/core/SftpSession.cpp" line="583"/>
         <source>Short download: %1 of %2 bytes transferred</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="507"/>
+        <location filename="../../src/core/SftpSession.cpp" line="597"/>
         <source>downloaded, md5 %1; content verification unavailable (no remote md5sum)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="515"/>
+        <location filename="../../src/core/SftpSession.cpp" line="605"/>
         <source>Download verification failed: the local file content differs from the remote (remote md5 %1, local md5 %2) — the remote file may be rewritten concurrently</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="521"/>
+        <location filename="../../src/core/SftpSession.cpp" line="611"/>
         <source>downloaded, md5 verified: %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="524"/>
+        <location filename="../../src/core/SftpSession.cpp" line="614"/>
         <source>downloaded (verification off)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="529"/>
+        <location filename="../../src/core/SftpSession.cpp" line="619"/>
         <source>Downloaded to %1 but failed to finalize %2</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="666"/>
+        <location filename="../../src/core/SftpSession.cpp" line="764"/>
         <source>Failed to finalize %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="731"/>
+        <location filename="../../src/core/SftpSession.cpp" line="829"/>
         <source>Cannot read %1</source>
         <translation>Cannot read %1</translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="761"/>
+        <location filename="../../src/core/SftpSession.cpp" line="859"/>
         <source>Failed to read %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="768"/>
-        <location filename="../../src/core/SftpSession.cpp" line="794"/>
+        <location filename="../../src/core/SftpSession.cpp" line="866"/>
+        <location filename="../../src/core/SftpSession.cpp" line="892"/>
         <source>Failed to read %1: %2</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="807"/>
+        <location filename="../../src/core/SftpSession.cpp" line="905"/>
         <source>Short write on SFTP channel (%1 of %2 bytes written); aborting to avoid silent corruption</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="840"/>
+        <location filename="../../src/core/SftpSession.cpp" line="938"/>
         <source>Upload verification failed: the remote file content differs from the local file (local md5 %1)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="844"/>
+        <location filename="../../src/core/SftpSession.cpp" line="942"/>
         <source>uploaded, md5 %1; content verification unavailable: %2</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="862"/>
+        <location filename="../../src/core/SftpSession.cpp" line="960"/>
         <source>uploaded, md5 verified: %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="863"/>
+        <location filename="../../src/core/SftpSession.cpp" line="961"/>
         <source>uploaded, md5 %1 (verification off)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../../src/core/SftpSession.cpp" line="987"/>
+        <location filename="../../src/core/SftpSession.cpp" line="1085"/>
         <source>neither remote md5sum nor SFTP read-back succeeded</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1990,123 +2882,160 @@ Another hssh instance (or MCP auto-launched GUI) may already own the port — ch
 <context>
     <name>hssh::SftpWidget</name>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="44"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="54"/>
         <source>Up one directory</source>
         <translation>Up one directory</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="45"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="55"/>
         <source>Home directory</source>
         <translation>Home directory</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="46"/>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="292"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="56"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="407"/>
         <source>Refresh</source>
         <translation>Refresh</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="47"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="57"/>
         <source>Upload files here</source>
         <translation>Upload files here</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="49"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="59"/>
         <source>Remote path</source>
         <translation>Remote path</translation>
     </message>
     <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="67"/>
+        <source>SFTP</source>
+        <translation type="unfinished">SFTP</translation>
+    </message>
+    <message>
         <location filename="../../src/app/widgets/SftpWidget.cpp" line="68"/>
+        <source>SCP</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="69"/>
+        <source>Transfer method for uploads and downloads.
+SFTP supports resume and directory sync; SCP is a single-channel legacy fallback.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="86"/>
         <source>Name</source>
         <translation>Name</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="68"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="86"/>
         <source>Size</source>
         <translation>Size</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="68"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="86"/>
         <source>Modified</source>
         <translation>Modified</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="68"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="86"/>
         <source>Permissions</source>
         <translation>Permissions</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="85"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="103"/>
         <source>Connecting…</source>
         <translation>Connecting…</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="96"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="118"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="285"/>
         <source>Error: %1</source>
         <translation>Error: %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="129"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="160"/>
         <source>Loading %1…</source>
         <translation>Loading %1…</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="185"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="216"/>
         <source>%1 items</source>
         <translation>%1 items</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="281"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="376"/>
         <source>Download…</source>
         <translation>Download…</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="283"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="378"/>
         <source>Upload files here…</source>
         <translation>Upload files here…</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="284"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="379"/>
         <source>Compare with local folder…</source>
         <translation>Compare with local folder…</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="286"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="381"/>
+        <source>Search in this folder…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="391"/>
+        <source>Stop Editing &apos;%1&apos;</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="393"/>
+        <source>Edit &apos;%1&apos;</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="399"/>
+        <source>Permissions…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="401"/>
         <source>New folder…</source>
         <translation>New folder…</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="287"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="402"/>
         <source>Rename…</source>
         <translation>Rename…</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="289"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="404"/>
         <source>Delete</source>
         <translation>Delete</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="317"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="451"/>
         <source>Select files to upload</source>
         <translation>Select files to upload</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="336"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="470"/>
         <source>%1 (folder)</source>
         <translation>%1 (folder)</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="337"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="471"/>
         <source>%1 (%2)</source>
         <translation>%1 (%2)</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="340"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="474"/>
         <source>Download</source>
         <translation>Download</translation>
     </message>
     <message numerus="yes">
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="341"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="475"/>
         <source>Download %n selected item(s)?</source>
         <translation>
             <numerusform>Download %n selected item?</numerusform>
@@ -2114,42 +3043,42 @@ Another hssh instance (or MCP auto-launched GUI) may already own the port — ch
         </translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="359"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="493"/>
         <source>Select download destination</source>
         <translation>Select download destination</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="378"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="512"/>
         <source>Save as</source>
         <translation>Save as</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="390"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="524"/>
         <source>New folder</source>
         <translation>New folder</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="390"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="524"/>
         <source>Folder name:</source>
         <translation>Folder name:</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="398"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="532"/>
         <source>Rename</source>
         <translation>Rename</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="398"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="532"/>
         <source>New name:</source>
         <translation>New name:</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="415"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="549"/>
         <source>Confirm delete</source>
         <translation>Confirm delete</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="416"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="550"/>
         <source>Delete %1?
 
 This cannot be undone.</source>
@@ -2158,37 +3087,83 @@ This cannot be undone.</source>
 This cannot be undone.</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="434"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="604"/>
+        <source>Already editing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="605"/>
+        <source>&apos;%1&apos; is already being edited in another tab:
+%2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="620"/>
+        <source>Stopped editing %1 (the local copy stays in the temp folder)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="638"/>
+        <source>Uploading edited %1…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="647"/>
+        <source>Local copy of %1 disappeared — edit stopped</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="653"/>
         <source>%1 failed: %2</source>
         <translation>%1 failed: %2</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="443"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="662"/>
         <source>Cancel</source>
         <translation>Cancel</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="443"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="662"/>
         <source>Transferring…</source>
         <translation>Transferring…</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="479"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="703"/>
         <source>Downloading %1 (%2/%3)</source>
         <translation>Downloading %1 (%2/%3)</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="499"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="732"/>
+        <source>Editing %1 — saves upload automatically</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="735"/>
+        <source>Could not fetch %1 for editing: %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="748"/>
+        <source>Uploaded edited %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="750"/>
+        <source>Auto-upload of %1 failed: %2 — saving again retries</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="753"/>
         <source>Cancelled</source>
         <translation>Cancelled</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="500"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="754"/>
         <source>Transfer failed: %1</source>
         <translation>Transfer failed: %1</translation>
     </message>
     <message>
-        <location filename="../../src/app/widgets/SftpWidget.cpp" line="502"/>
+        <location filename="../../src/app/widgets/SftpWidget.cpp" line="756"/>
         <source>Transfer finished: %1</source>
         <translation>Transfer finished: %1</translation>
     </message>
@@ -2196,42 +3171,142 @@ This cannot be undone.</translation>
 <context>
     <name>hssh::SshConnect</name>
     <message>
-        <location filename="../../src/core/SshConnect.cpp" line="57"/>
+        <location filename="../../src/core/SshConnect.cpp" line="200"/>
+        <source>Cannot resolve proxy host %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="210"/>
+        <source>Cannot create socket</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="227"/>
+        <source>Cannot connect to proxy %1:%2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="242"/>
+        <source>Proxy connect timeout (%1:%2)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="282"/>
+        <source>Failed to send HTTP CONNECT to proxy</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="292"/>
+        <source>HTTP proxy refused CONNECT (%1)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="314"/>
+        <source>Failed to greet SOCKS5 proxy</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="323"/>
+        <source>SOCKS5 proxy no reply</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="330"/>
+        <source>Not a SOCKS5 proxy</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="341"/>
+        <source>SOCKS5 credentials too long</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="356"/>
+        <source>SOCKS5 authentication failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="364"/>
+        <source>SOCKS5 proxy rejected auth methods</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="375"/>
+        <source>Target host too long</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="392"/>
+        <source>Failed to send SOCKS5 CONNECT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="401"/>
+        <source>SOCKS5 CONNECT failed (reply 0x%1)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="429"/>
+        <source>SOCKS5 proxy reply truncated</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="447"/>
+        <source>Unknown proxy type: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="616"/>
+        <source>Jump host failed to reach %1:%2: %3</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="632"/>
+        <source>Failed to create jump tunnel sockets</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="657"/>
         <source>Failed to create SSH session</source>
         <translation>Failed to create SSH session</translation>
     </message>
     <message>
-        <location filename="../../src/core/SshConnect.cpp" line="98"/>
+        <location filename="../../src/core/SshConnect.cpp" line="729"/>
         <source>Authentication failed</source>
         <translation>Authentication failed</translation>
+    </message>
+    <message>
+        <location filename="../../src/core/SshConnect.cpp" line="731"/>
+        <source>Authentication failed: %1</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>hssh::SshSession</name>
     <message>
-        <location filename="../../src/core/SshSession.cpp" line="522"/>
-        <location filename="../../src/core/SshSession.cpp" line="562"/>
+        <location filename="../../src/core/SshSession.cpp" line="753"/>
+        <location filename="../../src/core/SshSession.cpp" line="793"/>
         <source>Invalid session configuration</source>
         <translation>Invalid session configuration</translation>
     </message>
     <message>
-        <location filename="../../src/core/SshSession.cpp" line="665"/>
+        <location filename="../../src/core/SshSession.cpp" line="912"/>
         <source>Authentication failed</source>
         <translation>Authentication failed</translation>
     </message>
     <message>
-        <location filename="../../src/core/SshSession.cpp" line="800"/>
+        <location filename="../../src/core/SshSession.cpp" line="1064"/>
         <source>Connection lost; reconnect attempts exhausted</source>
         <translation>Connection lost; reconnect attempts exhausted</translation>
     </message>
     <message>
-        <location filename="../../src/core/SshSession.cpp" line="829"/>
+        <location filename="../../src/core/SshSession.cpp" line="1093"/>
         <source>Not connected</source>
         <translation>Not connected</translation>
     </message>
     <message>
-        <location filename="../../src/core/SshSession.cpp" line="684"/>
-        <location filename="../../src/core/SshSession.cpp" line="839"/>
+        <location filename="../../src/core/SshSession.cpp" line="941"/>
+        <location filename="../../src/core/SshSession.cpp" line="1103"/>
         <source>Failed to create SSH channel</source>
         <translation>Failed to create SSH channel</translation>
     </message>
@@ -2245,9 +3320,17 @@ This cannot be undone.</translation>
     </message>
 </context>
 <context>
+    <name>hssh::TerminalOutlineWidget</name>
+    <message>
+        <location filename="../../src/app/widgets/TerminalOutlineWidget.cpp" line="43"/>
+        <source>Prompts, build steps and log headers of the current terminal. Click to jump.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>hssh::TerminalSession</name>
     <message>
-        <location filename="../../src/terminal/TerminalSession.cpp" line="143"/>
+        <location filename="../../src/terminal/TerminalSession.cpp" line="174"/>
         <source>
 [Process finished with exit code %1]
 </source>
@@ -2256,7 +3339,7 @@ This cannot be undone.</translation>
 </translation>
     </message>
     <message>
-        <location filename="../../src/terminal/TerminalSession.cpp" line="152"/>
+        <location filename="../../src/terminal/TerminalSession.cpp" line="183"/>
         <source>
 [Error: %1]
 </source>
@@ -2268,22 +3351,50 @@ This cannot be undone.</translation>
 <context>
     <name>hssh::TerminalWidget</name>
     <message>
-        <location filename="../../src/terminal/TerminalWidget.cpp" line="834"/>
+        <location filename="../../src/terminal/TerminalWidget.cpp" line="1111"/>
+        <source>Open Link</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/TerminalWidget.cpp" line="1112"/>
+        <source>Copy Link Address</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/TerminalWidget.cpp" line="1115"/>
         <source>Copy</source>
         <translation>Copy</translation>
     </message>
     <message>
-        <location filename="../../src/terminal/TerminalWidget.cpp" line="836"/>
+        <location filename="../../src/terminal/TerminalWidget.cpp" line="1117"/>
         <source>Paste</source>
         <translation>Paste</translation>
     </message>
     <message>
-        <location filename="../../src/terminal/TerminalWidget.cpp" line="839"/>
+        <location filename="../../src/terminal/TerminalWidget.cpp" line="1120"/>
         <source>Find...</source>
         <translation>Find...</translation>
     </message>
     <message>
-        <location filename="../../src/terminal/TerminalWidget.cpp" line="983"/>
+        <location filename="../../src/terminal/TerminalWidget.cpp" line="1123"/>
+        <source>Show Timestamps</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../../src/terminal/TerminalWidget.cpp" line="1356"/>
+        <source>The remote host wants to put %n byte(s) into your clipboard. Allow?</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/TerminalWidget.cpp" line="1359"/>
+        <source>Remote Clipboard Access</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/TerminalWidget.cpp" line="1426"/>
         <source>Find... (Enter next, Shift+Enter previous, Esc close)</source>
         <translation>Find... (Enter next, Shift+Enter previous, Esc close)</translation>
     </message>
@@ -2359,6 +3470,105 @@ This cannot be undone.</translation>
     <message>
         <location filename="../../src/app/widgets/TransfersWidget.cpp" line="152"/>
         <source>%1 active · %2 done · %3 failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>hssh::ZModemEngine</name>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="145"/>
+        <source>ZMODEM: sender offers a file...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="210"/>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="234"/>
+        <source>ZMODEM: remote refused the transfer</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="231"/>
+        <source>ZMODEM: remote skipped the file</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="238"/>
+        <source>ZMODEM: remote kept rejecting the file offer</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="403"/>
+        <source>ZMODEM: sending %1 ... %2/%3 bytes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="415"/>
+        <source>ZMODEM: sent %1 (%2 bytes), waiting for confirmation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="430"/>
+        <source>ZMODEM: send complete: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="431"/>
+        <source>ZMODEM: send cancelled</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="465"/>
+        <source>ZMODEM: sending %1 (%2 bytes), waiting for rz...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="477"/>
+        <source>ZMODEM: no rz answered (is lrzsz installed?)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="511"/>
+        <source>ZMODEM: cannot write %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="521"/>
+        <source>ZMODEM: receiving %1 (%2 bytes)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="542"/>
+        <source>ZMODEM: %1 ... %2/%3 bytes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="566"/>
+        <source>ZMODEM: saved %1 (%2 bytes)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="567"/>
+        <source>ZMODEM: transfer ended (%1 bytes received)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="627"/>
+        <source>ZMODEM: incoming transfer detected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="748"/>
+        <source>ZMODEM: subpacket CRC error (got %1 of %2 bytes), requesting resend</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="753"/>
+        <source>ZMODEM: too many CRC errors, aborting</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../src/terminal/ZModemEngine.cpp" line="875"/>
+        <source>ZMODEM: frame CRC error, requesting resend</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

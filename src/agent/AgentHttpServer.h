@@ -1,6 +1,7 @@
 #ifndef HSSH_AGENT_AGENTHTTPSERVER_H
 #define HSSH_AGENT_AGENTHTTPSERVER_H
 
+#include "agent/AgentPolicy.h"
 #include "core/SessionConfig.h"
 
 #include <QHash>
@@ -107,6 +108,28 @@ public:
     virtual void sudoAsync(int index, const QString &command, const QString &secret,
                            bool useStoredCredential, int timeoutMs,
                            const SudoAsyncCallback &cb) = 0;
+
+    // B5-1: port forwarding on an SSH tab (backs /tabs/<ref>/forward and the
+    // MCP ssh_forward tools). The spec map carries type ("local"/"remote"/
+    // "dynamic"), bindAddress?, bindPort, targetHost?, targetPort?. List
+    // entries: {index,type,bindAddress,bindPort,target,active,status}.
+    virtual bool addForwardToTab(int index, const QVariantMap &spec, QString *errorMessage) = 0;
+    virtual QVariantList listForwardsForTab(int index) const = 0;
+    virtual bool removeForwardFromTab(int index, int forwardIndex, QString *errorMessage) = 0;
+
+    // B5-2: AgentPolicy "ask" flow. The GUI shows a consent dialog (no
+    // nested event loop; ~30 s auto-reject). The callback fires exactly once
+    // with allowed=false, reason="user_rejected"|"timeout"|"unknown_tab", or
+    // allowed=true with always=true when the user picked "always allow"
+    // (the caller persists the rule).
+    struct PolicyAnswer {
+        bool allowed = false;
+        QString reason; // user_rejected / timeout / unknown_tab
+        bool always = false;
+    };
+    using PolicyCallback = std::function<void(const PolicyAnswer &)>;
+    virtual void confirmPolicyAsync(int index, const QString &operation,
+                                    const QString &detail, const PolicyCallback &cb) = 0;
 };
 
 // Local REST API (default http://127.0.0.1:8222). Everything is VISIBLE:
@@ -151,6 +174,13 @@ public:
 //                                             (poll GET /transfer; cancel DELETE /transfer).
 //   GET    /api/v1/tabs/<ref>/transfer        {active, direction?, method?, bytesDone?, ...}
 //   DELETE /api/v1/tabs/<ref>/transfer        cancels the tab's transfer (keeps the .part)
+//   POST   /api/v1/tabs/<ref>/forward         {type:"local"|"remote"|"dynamic", bindAddress?,
+//                                              bindPort, targetHost?, targetPort?} adds a port
+//                                              forward on the tab's SSH connection; answers
+//                                              {ok, listen, forwards:[...]}
+//   GET    /api/v1/tabs/<ref>/forward         {forwards:[{index,type,bindAddress,bindPort,
+//                                              target,active,status}]}
+//   DELETE /api/v1/tabs/<ref>/forward?index=N removes one forward
 //   DELETE /api/v1/tabs/<ref>                 (closes the tab)
 // Tab <ref>: legacy positional index, or drift-safe "<name>[:<ordinal>]"
 // (name = sessionName/host/title; ordinal counts same-name tabs, 1-based).
@@ -201,6 +231,13 @@ private:
     void finishTabExec(const QString &requestId); // cleanup without responding
     // "user@host:port" for a tab index (live peer preferred over config).
     QString tabTarget(int index) const;
+    // B5-2: AgentPolicy gate for sensitive operations (upload/download/
+    // forward). Allow runs `proceed`; Deny answers 403; Ask defers to the
+    // GUI consent dialog and only proceeds on approval ("always" persists
+    // the rule). The socket outlives the ask (it stays open, unplanned
+    // disconnects are handled by respond() being a no-op on dead sockets).
+    void gatePolicy(QTcpSocket *socket, int index, AgentPolicy::Operation operation,
+                    const QString &auditDetail, const std::function<void()> &proceed);
 
     class Impl;
     std::unique_ptr<Impl> d;

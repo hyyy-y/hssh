@@ -55,10 +55,21 @@ private slots:
         QCOMPARE(SessionLogViewer::stripAnsi("\x1b" "7" "\x1b" "=x"), QStringLiteral("x"));
         // CRLF and lone CR both become LF.
         QCOMPARE(SessionLogViewer::stripAnsi("a\r\nb\rc"), QStringLiteral("a\nb\nc"));
-        // Bell / backspace / NUL are dropped, tab kept. Same hex-escape
-        // greediness trap: "\x07b" would be 0x07B ('{'), not BEL + 'b'.
-        QCOMPARE(SessionLogViewer::stripAnsi("a" "\x07" "b" "\x08" "c" "\x00" "d\te"),
-                 QStringLiteral("abcde"));
+        // Bell / backspace / NUL are dropped, tab kept. NB: the input is
+        // built byte-wise because a NUL inside a C string literal would
+        // truncate it (strlen stops there), and "\x07b" would greedily
+        // parse as 0x07B ('{').
+        QByteArray noisy;
+        noisy += 'a';
+        noisy += '\x07';
+        noisy += 'b';
+        noisy += '\x08';
+        noisy += 'c';
+        noisy += '\0';
+        noisy += 'd';
+        noisy += '\t';
+        noisy += 'e';
+        QCOMPARE(SessionLogViewer::stripAnsi(noisy), QStringLiteral("abcd\te"));
         // UTF-8 content is preserved byte-exact.
         QCOMPARE(SessionLogViewer::stripAnsi("\x1b[1m中文\x1b[m"),
                  QStringLiteral("中文"));

@@ -1,6 +1,10 @@
 ﻿#include "AgentHttpServer.h"
 
 #include "agent/AgentAudit.h"
+#include "agent/AgentMcpServer.h"
+#include "agent/AgentPolicy.h"
+#include "agent/AgentSudoAuth.h"
+#include "agent/AgentWebSocketServer.h"
 #include "core/ChannelCopySession.h"
 #include "core/SftpSession.h"
 #include "core/TransferSession.h"
@@ -251,6 +255,25 @@ public:
     AgentTabsInterface *tabs = nullptr;   // GUI tabs provider (GUI mode only)
     int listenPort = 8222;
     QString error;
+
+    // B5-3: MCP over Streamable HTTP. One AgentMcpServer instance (Http
+    // transport — no stdio) answers POST /api/v1/mcp; its responses are
+    // matched back to the waiting POST by JSON-RPC id.
+    class AgentMcpServer *mcpHttp = nullptr;
+    // B5-4: WebSocket endpoint (agent port + 1), only with Qt WebSockets.
+    class AgentWebSocketServer *wsServer = nullptr;
+    struct PendingMcp {
+        QTcpSocket *socket = nullptr;
+        QJsonValue id;
+        QTimer *timeout = nullptr;
+    };
+    QHash<QString, PendingMcp> pendingMcp; // serialized id -> waiting POST
+    // Legacy SSE streams (GET /api/v1/sse): socket + heartbeat timer.
+    struct SseStream {
+        QTcpSocket *socket = nullptr;
+        QTimer *heartbeat = nullptr;
+    };
+    QList<SseStream> sseStreams;
 };
 
 AgentHttpServer::AgentHttpServer(QObject *parent)
@@ -289,6 +312,17 @@ bool AgentHttpServer::start(int port)
                         QStringLiteral("accept error: %1").arg(message));
         emit acceptErrorOccurred(message);
     });
+
+#ifdef HSSH_HAS_WEBSOCKETS
+    // B5-4: the WebSocket endpoint rides on agent port + 1 (QWebSocketServer
+    // cannot share the REST port). A bind failure there is non-fatal: the
+    // REST/MCP surface keeps working without it.
+    d->wsServer = new AgentWebSocketServer(d->tabs, this);
+    if (d->wsServer->start(static_cast<quint16>(d->listenPort + 1)) == 0) {
+        d->wsServer->deleteLater();
+        d->wsServer = nullptr;
+    }
+#endif
     return true;
 }
 
@@ -303,6 +337,20 @@ void AgentHttpServer::stop()
     }
     d->buffers.clear();
     d->pendingOps.clear();
+    // B5-3: fail waiting MCP POSTs and close SSE streams.
+    for (auto it = d->pendingMcp.begin(); it != d->pendingMcp.end(); ++it) {
+        it->timeout->stop();
+        it->timeout->deleteLater();
+    }
+    d->pendingMcp.clear();
+    for (const Impl::SseStream &stream : d->sseStreams) {
+        stream.heartbeat->stop();
+        stream.heartbeat->deleteLater();
+        if (stream.socket->state() == QAbstractSocket::ConnectedState) {
+            stream.socket->disconnectFromHost();
+        }
+    }
+    d->sseStreams.clear();
     for (auto it = d->tabExecs.begin(); it != d->tabExecs.end(); ++it) {
         if (it.value().timer) {
             it.value().timer->stop();
@@ -320,6 +368,12 @@ void AgentHttpServer::stop()
         }
     }
     d->tabTransfers.clear();
+#ifdef HSSH_HAS_WEBSOCKETS
+    if (d->wsServer) {
+        d->wsServer->deleteLater();
+        d->wsServer = nullptr;
+    }
+#endif
     d->server->close();
     d->server->deleteLater();
     d->server = nullptr;
@@ -511,6 +565,119 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
         body[QStringLiteral("cipher")] = QStringLiteral("RSA-OAEP-SHA256+base64");
         respond(socket, 200, QJsonDocument(body).toJson(QJsonDocument::Compact));
         return;
+    }
+
+    // B5-3: MCP over Streamable HTTP (2025-03-26). ONE JSON-RPC message per
+    // POST; the HTTP response is the JSON-RPC response, delivered whenever
+    // the (possibly async) tool call completes. Backed by the same
+    // AgentMcpServer tool surface as the stdio transport.
+    if (method == "POST" && request.path == "/api/v1/mcp") {
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(request.body, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+            respondError(socket, 400, "Body must be ONE JSON-RPC message "
+                         "(batch arrays are unsupported): "
+                         + parseError.errorString().toUtf8());
+            return;
+        }
+        const QJsonObject message = doc.object();
+        if (!message.contains(QStringLiteral("id"))) {
+            // Notifications (e.g. notifications/initialized) never get a
+            // JSON-RPC response — acknowledge with 202 and no body.
+            socket->write("HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n"
+                          "Connection: close\r\n\r\n");
+            socket->disconnectFromHost();
+            return;
+        }
+
+        if (!d->mcpHttp) {
+            d->mcpHttp = new AgentMcpServer(this, AgentMcpServer::Transport::Http);
+            // Route responses back to the waiting POST by id. Number and
+            // string ids get distinct keys ("n:1" vs "s:1") — the 2026-08
+            // id-matching lesson.
+            d->mcpHttp->setMessageSink([this](const QJsonObject &response) {
+                if (!response.contains(QStringLiteral("id"))) {
+                    return; // server notification without a POST to answer
+                }
+                const QString key = response.value(QStringLiteral("id")).isString()
+                    ? QStringLiteral("s:") + response.value(QStringLiteral("id")).toString()
+                    : QStringLiteral("n:") + QString::number(
+                          response.value(QStringLiteral("id")).toDouble());
+                const auto it = d->pendingMcp.find(key);
+                if (it == d->pendingMcp.end()) {
+                    return;
+                }
+                QTcpSocket *waiting = it->socket;
+                it->timeout->stop();
+                it->timeout->deleteLater();
+                d->pendingMcp.erase(it);
+                respond(waiting, 200, QJsonDocument(response).toJson(QJsonDocument::Compact));
+            });
+        }
+
+        const QJsonValue id = message.value(QStringLiteral("id"));
+        const QString key = id.isString()
+            ? QStringLiteral("s:") + id.toString()
+            : QStringLiteral("n:") + QString::number(id.toDouble());
+
+        Impl::PendingMcp pending;
+        pending.socket = socket;
+        pending.id = id;
+        pending.timeout = new QTimer(this);
+        pending.timeout->setSingleShot(true);
+        connect(pending.timeout, &QTimer::timeout, this, [this, key]() {
+            const auto it = d->pendingMcp.find(key);
+            if (it == d->pendingMcp.end()) {
+                return;
+            }
+            QTcpSocket *waiting = it->socket;
+            it->timeout->deleteLater();
+            d->pendingMcp.erase(it);
+            respondError(waiting, 504, "MCP request timed out");
+        });
+        pending.timeout->start(120000);
+        d->pendingMcp.insert(key, pending);
+
+        d->mcpHttp->handleIncoming(request.body);
+        return; // the sink responds when the answer is ready
+    }
+
+    // B5-3: legacy HTTP+SSE transport compatibility (2024-11-05): the
+    // stream only carries the endpoint announcement + heartbeats — every
+    // JSON-RPC message travels over POST /api/v1/mcp above.
+    if (method == "GET" && request.path == "/api/v1/sse") {
+        QByteArray head = "HTTP/1.1 200 OK\r\n"
+                          "Content-Type: text/event-stream\r\n"
+                          "Cache-Control: no-cache\r\n"
+                          "Connection: keep-alive\r\n"
+                          "Access-Control-Allow-Origin: *\r\n\r\n";
+        socket->write(head);
+        socket->write("event: endpoint\ndata: /api/v1/mcp\n\n");
+
+        auto *heartbeat = new QTimer(this);
+        heartbeat->setInterval(15000);
+        connect(heartbeat, &QTimer::timeout, socket, [socket]() {
+            if (socket->state() == QAbstractSocket::ConnectedState) {
+                socket->write(": ping\n\n");
+            }
+        });
+        heartbeat->start();
+
+        Impl::SseStream stream;
+        stream.socket = socket;
+        stream.heartbeat = heartbeat;
+        d->sseStreams.append(stream);
+        connect(socket, &QTcpSocket::disconnected, this, [this, socket]() {
+            for (int i = 0; i < d->sseStreams.size(); ++i) {
+                if (d->sseStreams.at(i).socket == socket) {
+                    d->sseStreams[i].heartbeat->stop();
+                    d->sseStreams[i].heartbeat->deleteLater();
+                    d->sseStreams.removeAt(i);
+                    break;
+                }
+            }
+        });
+        return; // the connection stays open until the client hangs up
     }
 
     if (method == "GET" && request.path == "/api/v1/status") {
@@ -851,6 +1018,13 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
                 respondError(socket, 400, "Tab is not an SSH session: " + indexText);
                 return;
             }
+            // B5-2: transfers are policy-gated (default: ask per host).
+            gatePolicy(socket, index,
+                       isUpload ? AgentPolicy::Operation::Upload
+                                : AgentPolicy::Operation::Download,
+                       QStringLiteral("tab=%1 %2").arg(index).arg(remotePath),
+                       [this, socket, index, indexText, isUpload, localPath, remotePath,
+                        transferMethod, body, config]() {
         // A cancelled transfer keeps its record until the worker's finish
         // signal arrives (resource cleanup stays signal-driven); it must
         // NOT hold the tab's transfer slot (2026-09-20: cancel took up to
@@ -864,7 +1038,7 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
             }
         }
         if (slotBusy) {
-            respondError(socket, 409, "Another transfer is running on this tab");
+        respondError(socket, 409, "Another transfer is running on this tab");
             return;
         }
 
@@ -926,6 +1100,7 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
                     QStringLiteral("/api/v1/tabs/%1/transfer").arg(indexText);
                 respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
             }
+                       });
             return;
         }
 
@@ -964,26 +1139,45 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
         // Transfer cancel: stops the transfer on this tab. The local .part
         // file is KEPT so an sftp retry can resume from it.
         if (method == "DELETE" && sub == QStringLiteral("transfer")) {
+            // Cancel EVERY live record on the tab. A cancelled record stays
+            // in the table until its worker's finish signal (background
+            // cleanup) — stopping at the FIRST match could hit an
+            // already-cancelled winding-down record and leave the live one
+            // running (2026-09-23: exactly that starved a later upload with
+            // a phantom 409 after the tab index got reused).
+            bool any = false;
             for (auto it = d->tabTransfers.begin(); it != d->tabTransfers.end(); ++it) {
-                if (it.value().tabIndex != index) {
+                if (it.value().tabIndex != index || it.value().cancelled) {
                     continue;
                 }
                 if (it.value().worker) {
                     it.value().worker->cancelTransfer();
                 }
                 // Immediate logical release: the record stays only until the
-                // worker's finish signal (background cleanup); the tab slot
-                // and the status endpoint are free right now.
+                // worker's finish signal; the tab slot and the status
+                // endpoint are free right now.
                 it.value().cancelled = true;
                 AgentAudit::log(AgentAudit::Source::Rest, it.value().action,
                                 it.value().auditDetail, QStringLiteral("cancelled by client"));
-                QJsonObject result;
-                result[QStringLiteral("ok")] = true;
-                result[QStringLiteral("cancelled")] = true;
-                respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+                any = true;
+            }
+            if (!any) {
+                // Idempotent: an already-cancelled record still answers 200.
+                for (auto it = d->tabTransfers.cbegin(); it != d->tabTransfers.cend(); ++it) {
+                    if (it.value().tabIndex == index) {
+                        any = true;
+                        break;
+                    }
+                }
+            }
+            if (!any) {
+                respondError(socket, 404, "No transfer is running on this tab");
                 return;
             }
-            respondError(socket, 404, "No transfer is running on this tab");
+            QJsonObject result;
+            result[QStringLiteral("ok")] = true;
+            result[QStringLiteral("cancelled")] = true;
+            respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
             return;
         }
 
@@ -1211,6 +1405,104 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
             return;
         }
 
+        if (method == "POST" && sub == QStringLiteral("forward")) {
+            QJsonObject body;
+            QString bodyError;
+            if (!parseJsonBody(request.body, &body, &bodyError)) {
+                respondError(socket, 400, bodyError);
+                return;
+            }
+            QVariantMap spec;
+            spec[QStringLiteral("type")] = body.value(QStringLiteral("type")).toString();
+            spec[QStringLiteral("name")] = body.value(QStringLiteral("name")).toString();
+            spec[QStringLiteral("bindAddress")] = body.value(QStringLiteral("bindAddress")).toString();
+            spec[QStringLiteral("bindPort")] = body.value(QStringLiteral("bindPort")).toInt();
+            spec[QStringLiteral("targetHost")] = body.value(QStringLiteral("targetHost")).toString();
+            spec[QStringLiteral("targetPort")] = body.value(QStringLiteral("targetPort")).toInt();
+            // B5-2: forwards are policy-gated (default: ask per host).
+            gatePolicy(socket, index, AgentPolicy::Operation::Forward,
+                       QStringLiteral("tab=%1 %2:%3 -> %4:%5")
+                           .arg(index)
+                           .arg(spec.value(QStringLiteral("bindAddress")).toString(),
+                                QString::number(spec.value(QStringLiteral("bindPort")).toInt()),
+                                spec.value(QStringLiteral("targetHost")).toString())
+                           .arg(spec.value(QStringLiteral("targetPort")).toInt()),
+                       [this, socket, index, indexText, spec]() {
+            QString errorMessage;
+            if (!d->tabs->addForwardToTab(index, spec, &errorMessage)) {
+                respondError(socket, 400, QStringLiteral("Forward rejected: %1")
+                                                     .arg(errorMessage).toUtf8());
+                return;
+            }
+            // value(key, default) only defaults on a MISSING key; the map
+            // carries "" for absent body fields, so fall back on empty.
+            QString bindAddress = spec.value(QStringLiteral("bindAddress")).toString();
+            if (bindAddress.isEmpty()) {
+                bindAddress = QStringLiteral("127.0.0.1");
+            }
+            const int bindPort = spec.value(QStringLiteral("bindPort")).toInt();
+            AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("tab_forward_add"),
+                            QStringLiteral("tab=%1 %2:%3 -> %4:%5")
+                                .arg(index)
+                                .arg(bindAddress)
+                                .arg(bindPort)
+                                .arg(spec.value(QStringLiteral("targetHost")).toString())
+                                .arg(spec.value(QStringLiteral("targetPort")).toInt()),
+                            QStringLiteral("ok"));
+            QJsonObject result;
+            result[QStringLiteral("ok")] = true;
+            result[QStringLiteral("target")] = tabTarget(index);
+            result[QStringLiteral("listen")] =
+                QStringLiteral("%1:%2").arg(bindAddress).arg(bindPort);
+            QJsonArray forwards;
+            for (const QVariant &v : d->tabs->listForwardsForTab(index)) {
+                forwards.append(QJsonObject::fromVariantMap(v.toMap()));
+            }
+            result[QStringLiteral("forwards")] = forwards;
+            respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+                       });
+            return;
+        }
+
+        if (method == "GET" && sub == QStringLiteral("forward")) {
+            QJsonObject result;
+            QJsonArray forwards;
+            for (const QVariant &v : d->tabs->listForwardsForTab(index)) {
+                forwards.append(QJsonObject::fromVariantMap(v.toMap()));
+            }
+            result[QStringLiteral("forwards")] = forwards;
+            result[QStringLiteral("target")] = tabTarget(index);
+            respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+            return;
+        }
+
+        if (method == "DELETE" && sub == QStringLiteral("forward")) {
+            int forwardIndex = -1;
+            for (const QString &part : request.query.split(QLatin1Char('&'), Qt::SkipEmptyParts)) {
+                const int eq = part.indexOf(QLatin1Char('='));
+                if (eq > 0 && part.left(eq) == QLatin1String("index")) {
+                    forwardIndex = part.mid(eq + 1).toInt();
+                }
+            }
+            if (forwardIndex < 0) {
+                respondError(socket, 400, "Missing ?index=N (forward to remove)");
+                return;
+            }
+            QString errorMessage;
+            if (!d->tabs->removeForwardFromTab(index, forwardIndex, &errorMessage)) {
+                respondError(socket, 400, QStringLiteral("Remove failed: %1")
+                                                     .arg(errorMessage).toUtf8());
+                return;
+            }
+            AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("tab_forward_remove"),
+                            QStringLiteral("tab=%1 fwd=%2").arg(index).arg(forwardIndex),
+                            QStringLiteral("ok"));
+            QJsonObject result;
+            result[QStringLiteral("ok")] = true;
+            respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+            return;
+        }
+
         if (method == "DELETE" && sub.isEmpty()) {
             if (!d->tabs->closeTab(index)) {
                 respondError(socket, 404, "Unknown tab index: " + indexText);
@@ -1433,6 +1725,61 @@ QString AgentHttpServer::tabTarget(int index) const
     return {};
 }
 
+void AgentHttpServer::gatePolicy(QTcpSocket *socket, int index,
+                                 AgentPolicy::Operation operation,
+                                 const QString &auditDetail,
+                                 const std::function<void()> &proceed)
+{
+    using Answer = AgentTabsInterface::PolicyAnswer;
+
+    const SessionConfig config = d->tabs->sessionConfigForTab(index);
+    const QString identity = AgentSudoAuth::identityFor(config);
+    const QString opName = AgentPolicy::operationName(operation);
+
+    switch (AgentPolicy::instance().check(identity, operation)) {
+    case AgentPolicy::Decision::Allow:
+        proceed();
+        return;
+    case AgentPolicy::Decision::Deny:
+        AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("policy_denied"),
+                        QStringLiteral("%1 %2").arg(opName, auditDetail),
+                        QStringLiteral("identity=%1").arg(identity));
+        respondError(socket, 403,
+                     QStringLiteral("policy_denied: %1 is denied for this host "
+                                    "(agent/policyRules)")
+                         .arg(opName)
+                         .toUtf8());
+        return;
+    case AgentPolicy::Decision::Ask:
+        break;
+    }
+
+    AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("policy_ask"),
+                    QStringLiteral("%1 %2").arg(opName, auditDetail),
+                    QStringLiteral("identity=%1").arg(identity));
+    d->tabs->confirmPolicyAsync(
+        index, opName, auditDetail,
+        [this, socket, identity, operation, opName, auditDetail, proceed](const Answer &answer) {
+            if (!answer.allowed) {
+                AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("policy_denied"),
+                                QStringLiteral("%1 %2").arg(opName, auditDetail),
+                                QStringLiteral("reason=%1").arg(answer.reason));
+                respondError(socket, 403,
+                             QStringLiteral("policy_denied: %1 (%2)")
+                                 .arg(opName, answer.reason)
+                                 .toUtf8());
+                return;
+            }
+            if (answer.always) {
+                AgentPolicy::instance().grantAlways(identity, operation);
+            }
+            AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("policy_allowed"),
+                            QStringLiteral("%1 %2").arg(opName, auditDetail),
+                            answer.always ? QStringLiteral("always") : QStringLiteral("once"));
+            proceed();
+        });
+}
+
 void AgentHttpServer::finishTabExec(const QString &requestId)
 {
     const auto it = d->tabExecs.find(requestId);
@@ -1624,9 +1971,12 @@ void AgentHttpServer::pollTabExec(const QString &requestId)
 void AgentHttpServer::respond(QTcpSocket *socket, int status, const QByteArray &body)
 {
     const QByteArray statusText = status == 200 ? "OK"
+                                  : status == 202 ? "Accepted"
                                   : status == 400 ? "Bad Request"
                                   : status == 401 ? "Unauthorized"
+                                  : status == 403 ? "Forbidden"
                                   : status == 404 ? "Not Found"
+                                  : status == 504 ? "Gateway Timeout"
                                                   : "Internal Server Error";
     QByteArray response = "HTTP/1.1 " + QByteArray::number(status) + " " + statusText + "\r\n";
     response += "Content-Type: application/json; charset=utf-8\r\n";

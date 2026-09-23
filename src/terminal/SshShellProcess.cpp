@@ -30,6 +30,15 @@ bool SshShellProcess::start()
         return false;
     }
 
+    // Apply the gates stored before start() (SessionTab sets them right
+    // after construction — the session object did not exist yet then).
+    if (m_hostKeyVerifier) {
+        m_session->setHostKeyVerifier(m_hostKeyVerifier);
+    }
+    if (m_kbdintPrompter) {
+        m_session->setKbdintPrompter(m_kbdintPrompter);
+    }
+
     connect(m_session, &SshSession::dataReceived, this, [this](const QByteArray &data) {
         emit dataReceived(data);
     });

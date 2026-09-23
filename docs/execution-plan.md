@@ -115,28 +115,27 @@
 | 项 | 工作量 | 拆解要点 | 验收 |
 |----|--------|----------|------|
 | B4-1 PH2-09 SCP UI | 1d | ✅ 2026-09-22：SftpWidget 工具栏 SFTP/SCP 下拉，SCP 走 parentless ChannelCopySession(Scp) worker（进度/完成/取消全接入现有 TransferRegistry+QProgressDialog 管道） | UI 发起 scp 传输与 agent 路径同一 worker；真机验证并入 B1-5 |
-| B4-2 PH2-15 余量 | 2d | SessionConfig tags/favorite；SessionModel 置顶+搜索匹配；SessionLogViewer（读 logs/session_*.log，时间过滤/关键字高亮/导出） | 收藏置顶、tag 检索、日志按时间检索 |
-| B4-3 PH3-11 远程编辑 | 2–3d | 右键"编辑"→下载 %TEMP% → 系统编辑器 → QFileSystemWatcher mtime → 回传确认（保留权限位）；并发编辑锁定提示 | 保存自动回传，内容一致 |
-| B4-4 PH3-12 远程搜索 | 3d | listDirRecursive 后台线程 + 名称/大小/时间过滤 + 深度限制；结果双击定位 | 万级文件不卡 UI |
-| B4-5 PH3-14 chmod UI | 2d | 九位 rwx 勾选 + 八进制输入 + 递归；chown 走 sudo 确认（v1 仅显示属主） | 改权限立即生效 |
-| B4-6 PH3-13 服务器直传 | 3–4d | 双 SftpSession 内存管道 64KB 泵；进度取较小侧；UI 双远端选择，不支持时提示本地中转 | 两远端主机间传输 md5 一致 |
+| B4-2 PH2-15 余量 | 2d | ✅ 2026-09-23：SessionConfig tags/favorite（持久化+快速过滤命中+收藏置顶排序）；会话树右键 Add/Remove to Favorites、Edit Tags...（逗号分隔去重排序）；SessionLogViewer（Tools→Session Log Viewer / 标签右键 View Session Log 预选当前标签日志）——原始字节流 ANSI/OSC/控制符剥离显示、按文件名时间戳过滤（All/Today/3/7/30d）、关键字全量高亮+回车循环跳转（万条上限）、导出剥离文本（>20MB 只显示尾部）；test_sessionlog（时间戳解析/ANSI 剥离/tags 往返） | 收藏置顶、tag 检索、日志按时间检索 |
+| B4-3 PH3-11 远程编辑 | 2–3d | ✅ 2026-09-23：`RemoteEditManager` 单例（sessionKey+remotePath 全局锁防多标签互踩、QFileSystemWatcher+500ms 防抖、mtime 比对去重、rename 式保存自动重挂监听、本地副本删除→editGone 收尾）；SftpWidget 右键 Edit '<file>'（下载 %TEMP%\hssh-edit\<session>\<sha1-8>_<name>→下载完成才 beginWatch→系统编辑器）→保存自动回传（SFTP 顺序队列 upload+chmod 保权限位）+Stop Editing；SftpSession 新增 setPermissions（sftp_chmod）；test_remoteedit（锁冲突/防抖合并双写/markSynced 去重/删除收尾）。真机编辑闭环待 B1-5 一并验 | 保存自动回传，内容一致（单测覆盖管理器语义；真机待验） |
+| B4-4 PH3-12 远程搜索 | 3d | ✅ 2026-09-23：SftpSession 遍历加 maxDepth（服务器侧截断省网络）+doListDirRecursive 复位 m_cancelTransfer（修预存在"取消毒化下一遍历"）；`RemoteSearchDialog`（SftpWidget 右键 Search in this folder，非模态单例）：通配名过滤（含 '/' 匹配相对路径）/大小过滤（目录被尺寸条件排除）/N 天内修改/深度上限（默认 3，0=不限）；过滤纯函数本地跑（万级条目毫秒级），结果表 5 万行上限+数值排序键，双击定位（目录→自身/文件→父目录）；搜索期间 dirTreeProgress 实时计数+Cancel；m_active+root 匹配防与 compare 遍历串台；test_remotesearch（通配/大小/时间/组合） | 万级文件不卡 UI（遍历在 worker 线程+本地过滤） |
+| B4-5 PH3-14 chmod UI | 2d | ✅ 2026-09-23：`PermissionsDialog`（SftpWidget 右键 Permissions…，单选条目）——3×3 rwx 勾选 ↔ 八进制输入双向同步（m_syncing 防回环，八进制 3 位完整才触发反向同步）、符号显示、属主/属组只读展示（SftpFileInfo 新增 owner/group，attr->owner 空指针防护）；目录可勾递归（`setPermissionsRecursive`：worker 线程内 collectRemoteFiles 遍历+sftp_chmod 全条目含根，进度/取消走现有通道，失败汇总首个错误）；test_permissions（parseOctal 严格 3 位八进制/symbolic 渲染/对话框 0777 掩码初始化+键入同步） | 改权限立即生效（operationFinished→refresh；真机并入 B1-5） |
+| B4-6 PH3-13 服务器直传 | 3–4d | ✅ 2026-09-23：`ServerTransferDialog`（Tools→Server-to-Server Transfer）——**设计变更**：放弃原"内存管道 64KB 泵"改**两跳临时文件中转**（源→verify 下载→%TEMP%\hssh-s2s→verify 上传→目标），SftpSession 全套安全网（.part 原子性/双向 md5/换连接重试/timeout=0）原样继承，双跳校验直接保证端到端 md5 一致——流式管道需绕开安全网重写读写循环，得不偿失。双会话下拉（保存的 SSH 会话）+双路径；两阶段进度条+Cancel；**连接级 errorOccurred 在活动阶段按终态处理**（doDownload 未连接路径只发 errorOccurred 无 transferFinished，被动显示会挂死）；TransferRegistry 两跳分别登记、下载成功即刻关闭源条目（上传失败不连累源状态）；对话框关闭=取消；workers parentless 同铁律 | 两远端主机间传输 md5 一致（双跳各带 verify；真机并入 B1-5） |
 
 ---
 
 ## B5 · Agent 扩展（9–10d）
 
-### B5-1 ssh_forward 工具（2d）
-- MCP `ssh_forward(sessionId, type, local, remote)` + `ssh_list_forwards`/`ssh_remove_forward`；REST `/tabs/<ref>/forward` 对应；复用 PortForwardManager；返回监听地址。
+### B5-1 ssh_forward 工具（2d）✅ 完成（2026-09-23，test_agent_http 新增 forwardRoutes：空列表/类型与端口校验/local 缺 target 拒绝/listen+target 返回/动态 SOCKS 无 target/列表稳定索引/删除重排/越界与缺 index/local 标签拒绝，20 用例全绿）
+> AgentTabsInterface 新增 addForwardToTab/listForwardsForTab/removeForwardFromTab（MainWindow 实现，复用每会话 PortForwardManager；spec 校验=type 枚举/bindPort 1-65535/local+remote 需 targetHost:targetPort）；REST `/tabs/<ref>/forward` 三方法（POST 返回 {ok,listen,target,forwards}，DELETE ?index=N）；MCP `ssh_forward`/`ssh_list_forwards`/`ssh_remove_forward`（withTab 寻址，content+结构化字段双通道，审计 tab_forward_add/remove）。坑：`QVariantMap::value(key, default)` **只在键缺失时取默认值**——空串键会穿透，bindAddress 必须显式 isEmpty 回退。
 
-### B5-2 AgentPolicy 授权（3d）
-- `src/agent/AgentPolicy.{h,cpp}`：规则（host/operation → allow|ask|deny，可记住）；执行前查询；ask 经 MainWindow 弹确认（复用 confirmSudo 异步模式）；上传/下载/转发默认强制确认（可"本会话免确认"）。
-- 验收：首次 ask→白名单→免确认全流程；deny 拒绝并审计。
+### B5-2 AgentPolicy 授权（3d）✅ 完成（2026-09-23，test_agent_http policyGate：默认 Ask 弹窗/拒绝与超时 403 原因码/会话授予免弹窗/Always 持久化规则后免弹窗/deny 规则无弹窗直拒/local 标签空 identity 放行）
+> `src/agent/AgentPolicy`：会话授予（内存）→持久规则（`agent/policyRules` 字符串列表 `<identity>|<op>=(allow|ask|deny)`）→默认（Upload/Download/Forward=Ask，Exec=Allow——可视终端即审计；sudo 保持自有确认链）。identity 复用 AgentSudoAuth（saved→session:id，临时→host:user@host）。AgentHttpServer `gatePolicy`：Allow 放行/Deny 403+审计/Ask 挂起 HTTP 请求走 `confirmPolicyAsync`（MainWindow 弹窗：This session/Always/Deny+30s 自动拒，无嵌套事件循环）。**顺手修真 bug：DELETE /transfer 只取消标签第一条记录——已取消但仍在后台收尾的记录会挡住真正活跃的那条**（偶发 409，全表诊断法定位）。
 
-### B5-3 MCP Streamable HTTP / SSE（2–3d）
-- AgentHttpServer：`POST /api/v1/mcp`（Streamable HTTP 2025-03-26）+ `GET /api/v1/sse`（传统 SSE 兼容）；复用 token 鉴权；与现有 stdio MCP 共用工具面。
+### B5-3 MCP Streamable HTTP / SSE（2–3d）✅ 完成（2026-09-23，mcpHttpEndpoint：initialize/tools-list/ping 数字+字符串 id 往返/通知 202/坏 JSON 400；GUI 冒烟 curl 直打 /mcp /sse 通过）
+> `POST /api/v1/mcp`（Streamable HTTP 2025-03-26 子集：单消息单响应，批量 400）：AgentMcpServer 加 `Transport::Http` 模式（无 stdin，`handleIncoming` 进/`setMessageSink` 出），**与 stdio 完全同一工具面**；响应按 JSON-RPC id（n:/s: 前缀——2026-08 id 匹配教训）路由回挂起的 POST，120s 兜底 504；通知（无 id）按规范回 202。`GET /api/v1/sse`（2024-11-05 兼容）：endpoint 事件指向 /api/v1/mcp + 15s 心跳，断连清理。token 鉴权沿用全局门。AgentHttpServer::stop 统一收尾（挂起 MCP 504 化、SSE 断开）。
 
-### B5-4 WebSocket（2d，依赖 B3-3）
-- Qt6 WebSockets `/api/v1/ws`；帧协议 {type: shell-input|shell-output|ping}；桥接可视标签 exec/send（沿用 tabs 语义，不新建 headless 会话）。
+### B5-4 WebSocket（2d，依赖 B3-3）✅ 代码完成（2026-09-23，**条件编译未验证**——本机 Qt SDK 无 WebSockets 模块，HSSH_HAS_WEBSOCKETS 关闭时空翻译单元）
+> `src/agent/AgentWebSocketServer`（全 #ifdef 守卫；无 Q_OBJECT 避开 moc 条件编译坑）：监听 agent 端口+1（绑定失败不致命）；帧协议 {ping→pong / shell-input(ref,data)→sendInputToTab / read(ref,lines) / subscribe(ref)→200ms 泵 readTabRange 增量推 shell-output / unsubscribe}；ref 解析与 REST 同语义（name[:ordinal]）。**装了模块的机器首次构建时会打印 "agent WebSocket endpoint available"，届时需真机验证帧协议**。
 
 ---
 
@@ -144,11 +143,11 @@
 
 | 项 | 工作量 | 拆解要点 | 验收 |
 |----|--------|----------|------|
-| B6-1 PH3-16 监控面板 | 4–5d | ServerMonitor 采样线程（/proc/stat、meminfo、net/dev、df -P）+ 自绘 QPainter 曲线 MonitorDock；断开自停 | 实时曲线，采样 ≥1s 低开销 |
-| B6-2 PH3-17 进程管理 | 2–3d | `ps -eo` 解析表格；SIGTERM/SIGKILL（sudo 走确认弹窗） | 列表准确，kill 生效 |
-| B6-3 PH3-19 网络工具 | 2–3d | ping/traceroute/ss -tunlp/端口探测表单 → SSH exec → 输出面板可中断 | 输出实时滚动可停止 |
-| B6-4 PH3-18 Docker | 3–4d | docker CLI JSON（ps/images/logs/start/stop/restart/rm/exec）封装 + DockerWidget | 容器启停与日志可用 |
-| B6-5 PH3-15 定时任务 | 3–4d | Scheduler（间隔/cron）→ exec 或注入终端；结果写会话日志；任务面板启停 | 按计划执行留痕 |
+| B6-1 PH3-16 监控面板 | 4–5d | ✅ 2026-09-23：**B6 公共地基** `RemoteCommandChannel`（parentless worker+独立连接，一次性 runCommand/流式 runStream/取消，timeout=0+排空 stderr 铁律，stderr 尾巴进 error）；`ServerMonitor`（每 tick **一条组合命令**一次往返：/proc/stat 双读夹 sleep 1 算 CPU%、meminfo、net/dev、df -P；纯解析器 parseCpuPair/parseMemInfo/parseNetDev/parseDf/parseSample，计数器回绕跳过防负速率；断连自停）；`MonitorWidget` dock（View→Server Monitor；会话下拉=已连 SSH 标签；QPainter 自绘 CPU/MEM 双曲线 300 点历史+网格；net Top3 速率；磁盘表） | 实时曲线，采样 ≥1s 低开销（2s tick 单命令往返；真机数据面并入 B1-5） |
+| B6-2 PH3-17 进程管理 | 2–3d | ✅ 2026-09-23：`ProcessDialog`（标签右键 Process List...，SSH 标签）——`ps -eo pid,ppid,user,%cpu,%mem,stat,args --sort=-%cpu | head -500` 走独立连接（不打扰终端）；纯解析器 parsePs（前 6 定长字段+args 保留空格）；过滤框（user/命令/PID）+列排序（数值键防 "9"<"10" 字符串序）；End Process(SIGTERM)/Kill(SIGKILL) 带确认，**stderr 留独立通道**（去掉 2>&1，错误尾巴进弹窗），权限不足明示走终端 sudo 路径不自动接力 | 列表准确，kill 生效（解析器单测；真机并入 B1-5） |
+| B6-3 PH3-19 网络工具 | 2–3d | ✅ 2026-09-23：`NetworkToolsDialog`（标签右键 Network Tools...）——ping/traceroute **流式**（runStream，实时滚动+Stop 中断=关 channel）；ss -tunlp（busybox 回退 netstat）与端口探测（`timeout 4 bash -c 'echo>/dev/tcp/h/p'`→OPEN/CLOSED）一次性；**buildCommand 纯函数注入防护**（目标仅 `[A-Za-z0-9_.:\[\]-]`，端口 1-65535 数字校验——单测覆盖 `; rm`/`$(reboot)`/`|` 拒绝） | 输出实时滚动可停止（真机并入 B1-5） |
+| B6-4 PH3-18 Docker | 3–4d | ✅ 2026-09-23：`DockerDialog`（标签右键 Docker...）——容器表（`docker ps -a --format '{{json .}}'` 行级 JSON，parseContainers 纯函数单测）/镜像表双 Tab；选中行启 Start/Stop/Restart/Remove（rm 带 `-f` 确认弹窗，**容器 id 过 safeIdRx 再进 shell 行**）；Logs... 模态子窗流式 `docker logs -f --tail 200`（关窗即 cancel）；docker 错误走 stderr 独立通道进弹窗（ps/images 不加 2>&1） | 容器启停与日志可用（真机并入 B1-5） |
+| B6-5 PH3-15 定时任务 | 3–4d | ✅ 2026-09-23：`SchedulerDialog`（标签右键 Scheduled Tasks...）——间隔任务（10s..1h 预设）双模式：**background**（专用连接 runCommand，输出尾部+留痕）/**terminal**（`sendInput` 注入可视标签，会话日志天然留痕）；1s tick 扫描到期；结果追加 `<AppData>/logs/scheduler_yyyyMMdd.log`（与终端会话日志同目录）+面板显示最近结果；任务随标签生命周期（内存态，无持久化——v1 边界已注明） | 按计划执行留痕（到期调度纯函数 nextDue；真机并入 B1-5） |
 
 ---
 

@@ -123,7 +123,13 @@ bool readPasswordFromConsole(QString *out)
 
 bool loadApplicationTranslator(QApplication &app)
 {
-    const QString localeName = QLocale::system().name(); // e.g. "zh_CN", "en_US"
+    // ui/language setting first ("system" / "zh_CN" / "en"); the OS locale is
+    // the fallback and the default. Takes effect at startup — the settings
+    // dialog offers an immediate restart when the value changes.
+    QString localeName = hssh::Config::instance().stringValue(QStringLiteral("ui/language"));
+    if (localeName.isEmpty() || localeName == QLatin1String("system")) {
+        localeName = QLocale::system().name(); // e.g. "zh_CN", "en_US"
+    }
     const QString baseName = QStringLiteral("hssh_") + localeName;
 
     auto *translator = new QTranslator(&app);

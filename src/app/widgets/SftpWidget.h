@@ -24,6 +24,8 @@ QT_END_NAMESPACE
 
 namespace hssh {
 
+class RemoteSearchDialog;
+
 // Remote file browser for one SSH session: directory listing, navigation,
 // upload/download, mkdir/rename/delete.
 class SftpWidget : public QWidget {
@@ -44,7 +46,10 @@ public:
     // Upload without a file dialog (used by the compare pane).
     void uploadTo(const QString &localPath, const QString &remotePath);
     // Recursive remote tree listing (folder compare); result via dirTreeListed.
-    void listDirTree(const QString &path);
+    // maxDepth > 0 caps the descent (remote search).
+    void listDirTree(const QString &path, int maxDepth = 0);
+    // Cancel an in-flight recursive walk started via listDirTree().
+    void cancelTreeWalk();
     // mkdir -p for a remote path (parent directories created as needed).
     void ensureRemoteDir(const QString &path);
     // Compare highlighting: filename -> text color; empty map clears.
@@ -80,10 +85,20 @@ private:
     void mkdirDialog();
     void renameEntry(const SftpFileInfo &entry);
     void deleteEntries(const QList<SftpFileInfo> &entries);
+    // PH3-11 remote edit: download to %TEMP%, open the system editor, watch
+    // saves and upload back (see RemoteEditManager for the lock/debounce).
+    void editRemote(const SftpFileInfo &entry);
+    void stopEditing(const QString &remotePath);
+    void onEditSaved(const QString &sessionKey, const QString &remotePath,
+                     const QString &localPath, quint32 permissions);
+    void onEditGone(const QString &sessionKey, const QString &remotePath);
+    [[nodiscard]] QString editSessionKey() const;
     // PH2-09: the selected transfer channel ("sftp"/"scp") and the SCP route
     // (a parentless ChannelCopySession worker, freed on finish).
     [[nodiscard]] QString transferMethod() const;
     void startCopyTransfer(bool isUpload, const QString &remotePath, const QString &localPath);
+    // PH3-12: remote file search (non-modal, one per widget).
+    void openRemoteSearch();
 
     void onConnected(const QString &homePath);
     void onDirListed(const QString &path, const QList<SftpFileInfo> &entries);
@@ -119,6 +134,11 @@ private:
     QHash<QString, int> m_transferIds; // remote path -> TransferRegistry id
     QSet<int> m_quietTransfers;        // transfer ids that never pop the progress dialog
     bool m_transferInProgress = false;
+    // PH3-11: remote-path sets for the edit round-trip.
+    QSet<QString> m_pendingEditDownloads;  // downloads whose finish opens the editor
+    QHash<QString, QString> m_editUploads; // remote path -> local path (upload-back in flight)
+    // PH3-12: the (single, non-modal) remote search dialog.
+    QPointer<RemoteSearchDialog> m_searchDialog;
 };
 
 } // namespace hssh

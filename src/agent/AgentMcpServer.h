@@ -25,8 +25,24 @@ class AgentMcpServer : public QObject {
     Q_OBJECT
 
 public:
-    explicit AgentMcpServer(QObject *parent = nullptr);
+    // Stdio: newline-delimited JSON-RPC on stdin/stdout (--agent-mcp).
+    // Http: no stdio — messages arrive via handleIncoming() and responses
+    // go to the sink set with setMessageSink() (backs POST /api/v1/mcp).
+    enum class Transport {
+        Stdio,
+        Http,
+    };
+
+    explicit AgentMcpServer(QObject *parent = nullptr,
+                            Transport transport = Transport::Stdio);
     ~AgentMcpServer() override;
+
+    // Http transport: where to deliver responses instead of stdout. The
+    // sink stays valid for the server's lifetime; nullptr restores stdout.
+    void setMessageSink(const std::function<void(const QJsonObject &)> &sink);
+    // Http transport: feed ONE JSON-RPC message (as received in a POST
+    // body). Behaves exactly like a line from stdin.
+    void handleIncoming(const QByteArray &json);
 
 private:
     void handleMessage(const QByteArray &line);

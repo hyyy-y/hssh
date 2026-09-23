@@ -86,7 +86,7 @@ void SessionTab::connectSession()
         if (Config::instance().stringValue(QStringLiteral("security/hostKeyPolicy"),
                                            QStringLiteral("accept-new"))
             == QLatin1String("ask")) {
-            ssh->session()->setHostKeyVerifier(
+            ssh->setHostKeyVerifier(
                 [this](const KeyStore::HostKeyInfo &info, bool changed)
                     -> KeyStore::HostKeyDecision {
                     auto result = std::make_shared<int>(
@@ -103,7 +103,7 @@ void SessionTab::connectSession()
         // PH2-13: interactive 2FA (keyboard-interactive) rounds — same
         // worker→GUI marshalling, plus an optional per-session answer cache
         // (the dialog's "remember" checkbox).
-        ssh->session()->setKbdintPrompter(
+        ssh->setKbdintPrompter(
             [this](const QString &name, const QString &instruction,
                    const QStringList &prompts, const QList<bool> &echo,
                    QStringList *answers) -> bool {

@@ -3,6 +3,7 @@
 
 #include "SessionConfig.h"
 #include "TransferSession.h"
+#include "KeyStore.h"
 
 #include <QList>
 #include <QObject>
@@ -26,6 +27,10 @@ struct SftpFileInfo {
     qint64 mtime = 0;        // seconds since epoch
     quint32 permissions = 0; // unix mode bits
     bool isDir = false;
+    // PH3-14: owner/group as reported by the server (may be empty); shown
+    // read-only in the permissions dialog — chown stays sudo-gated.
+    QString owner;
+    QString group;
 };
 
 // One entry of a recursive directory walk (used by directory downloads and
@@ -51,18 +56,30 @@ public:
 
     // Spin up the worker thread and connect asynchronously.
     void start() override;
+    // Host-key gate (PH2-12 semantics); set BEFORE start(). Default:
+    // new keys accepted (TOFU), changed keys rejected.
+    void setHostKeyVerifier(const KeyStore::HostKeyVerifier &verifier);
     // Cancel any running transfer, stop the thread, close the connection.
     void stop() override;
 
     void listDir(const QString &path);
-    // Recursive walk of a remote directory tree (folder compare). Results
-    // include directories as well as files.
-    void listDirRecursive(const QString &path);
+    // Recursive walk of a remote directory tree (folder compare / remote
+    // search). maxDepth > 0 stops descending after that many levels
+    // (0 = unlimited).
+    void listDirRecursive(const QString &path, int maxDepth = 0);
     void canonicalize(const QString &path);
     void makeDir(const QString &path);
     void renameEntry(const QString &oldPath, const QString &newPath);
     void removeFile(const QString &path);
     void removeDir(const QString &path);
+    // chmod on a remote path (unix mode bits, e.g. 0644). Used by the remote
+    // editor to restore permission bits after an auto-upload (an upload to a
+    // path that vanished meanwhile would otherwise materialize with the
+    // server's default umask).
+    void setPermissions(const QString &path, quint32 mode);
+    // chmod -R: apply `mode` to the path and everything below it. Progress
+    // arrives as dirTreeProgress, completion as operationFinished("chmod").
+    void setPermissionsRecursive(const QString &path, quint32 mode);
     // Downloads remotePath to localPath. When verify is set (default) the
     // downloaded content is checked against the remote (size re-stat + md5)
     // and a mismatch retries once with a FULL re-download over a fresh
@@ -94,12 +111,13 @@ signals:
 
 private:
     void doConnect();
-    void doListDir(const QString &path);
-    void doCanonicalize(const QString &path);
+    void doListDir(const QString &path);    void doCanonicalize(const QString &path);
     void doMakeDir(const QString &path);
     void doRenameEntry(const QString &oldPath, const QString &newPath);
     void doRemoveFile(const QString &path);
     void doRemoveDir(const QString &path);
+    void doSetPermissions(const QString &path, quint32 mode);
+    void doSetPermissionsRecursive(const QString &path, quint32 mode);
     void doDownload(const QString &remotePath, const QString &localPath, bool verify);
     // One full download attempt. allowResume permits continuing a partial
     // local file (first attempt only — after a verification failure the
@@ -117,7 +135,7 @@ private:
     // (short write / content mismatch: the channel may be wedged).
     bool uploadAttempt(const QString &localPath, const QString &remotePath, bool verify,
                        QString *error, QString *note, bool *retryable);
-    void doListDirRecursive(const QString &path);
+    void doListDirRecursive(const QString &path, int maxDepth);
 
     // Post-upload integrity check. Returns true when the remote file's MD5
     // matches localMd5Hex. Sets *unavailable (with a reason) when neither
@@ -133,10 +151,11 @@ private:
 
     // Recursive walk collecting entries under remoteDir. Files are always
     // collected; directories only when includeDirs is set (compare needs
-    // them, downloads don't).
+    // them, downloads don't). maxDepth > 0 stops descending after that many
+    // levels (remote search uses it to cap the network cost).
     bool collectRemoteFiles(const QString &remoteDir, const QString &relDir,
                             QList<RemoteFileEntry> &out, QString &error,
-                            bool includeDirs = false);
+                            bool includeDirs = false, int depth = 0, int maxDepth = 0);
     // Streams one remote file into an already-open local file; `done` is the
     // transfer-wide cumulative byte counter reported under `key`. When
     // startOffset > 0 the remote read is seeked there first (resume).
@@ -155,6 +174,7 @@ private:
     QThread m_thread;
     ssh_session m_ssh = nullptr;
     sftp_session m_sftp = nullptr;
+    KeyStore::HostKeyVerifier m_hostKeyVerifier;
     std::atomic<bool> m_cancelTransfer{false};
     // Running counter for recursive tree walks (progress reporting).
     int m_treeWalkCount = 0;

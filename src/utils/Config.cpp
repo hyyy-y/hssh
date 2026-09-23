@@ -32,6 +32,11 @@ void seedDefaultKeys()
          QStringLiteral("Appearance"), QStringLiteral("Theme"),
          {QStringLiteral("dark"), QStringLiteral("light")},
          QStringLiteral("Color theme applied to the whole application.")},
+        {QStringLiteral("ui/language"), ConfigKeyType::Enum, QStringLiteral("system"),
+         QStringLiteral("Appearance"), QStringLiteral("Language"),
+         {QStringLiteral("system"), QStringLiteral("zh_CN"), QStringLiteral("en")},
+         QStringLiteral("Interface language. 'system' follows the OS locale; "
+                        "takes effect after a restart.")},
         {QStringLiteral("terminal/fontFamily"), ConfigKeyType::Font, QString(),
          QStringLiteral("Appearance"), QStringLiteral("Terminal font"),
          {}, QStringLiteral("Empty keeps the current built-in font.")},

@@ -1,8 +1,15 @@
 #include "SftpWidget.h"
 
+#include "app/GuiHostKeyPrompt.h"
+#include "app/RemoteEditManager.h"
+#include "app/dialogs/PermissionsDialog.h"
+#include "app/dialogs/RemoteSearchDialog.h"
+
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -19,9 +26,11 @@
 #include <QMimeData>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QStandardItemModel>
 #include <QTableView>
 #include <QToolButton>
+#include <QUrl>
 #include <QVBoxLayout>
 
 namespace hssh {
@@ -100,6 +109,10 @@ SftpWidget::SftpWidget(const SessionConfig &config, QWidget *parent)
     // and QObject::moveToThread refuses (and ignores) objects with a parent,
     // which would silently pin every sftp operation on the GUI thread.
     m_sftp = new SftpSession(m_config);
+    m_sftp->setHostKeyVerifier(
+        [](const KeyStore::HostKeyInfo &info, bool changed) {
+            return decideHostKey(info, changed);
+        });
     connect(m_sftp, &SftpSession::connected, this, &SftpWidget::onConnected);
     connect(m_sftp, &SftpSession::errorOccurred, this, [this](const QString &message) {
         m_statusLabel->setText(tr("Error: %1").arg(message));
@@ -112,10 +125,19 @@ SftpWidget::SftpWidget(const SessionConfig &config, QWidget *parent)
     connect(m_sftp, &SftpSession::dirTreeListed, this, &SftpWidget::dirTreeListed);
     connect(m_sftp, &SftpSession::dirTreeProgress, this, &SftpWidget::dirTreeProgress);
     m_sftp->start();
+
+    // PH3-11: auto-upload when the system editor saves a remote-edit copy.
+    connect(&RemoteEditManager::instance(), &RemoteEditManager::editSaved,
+            this, &SftpWidget::onEditSaved);
+    connect(&RemoteEditManager::instance(), &RemoteEditManager::editGone,
+            this, &SftpWidget::onEditGone);
 }
 
 SftpWidget::~SftpWidget()
 {
+    // Stop watching this session's edits (the temp files stay: the editor
+    // may still hold them open; %TEMP% is the right place for orphans).
+    RemoteEditManager::instance().endEditsForSession(editSessionKey());
     m_sftp->stop();
     // stop() has joined the worker thread, so direct deletion is safe
     // (deleteLater would never run: the object's thread has no event loop).
@@ -245,6 +267,10 @@ void SftpWidget::startCopyTransfer(bool isUpload, const QString &remotePath,
                                        : TransferRegistry::Direction::Download,
                   true);
     auto *worker = new ChannelCopySession(m_config, ChannelCopySession::Mode::Scp);
+    worker->setHostKeyVerifier(
+        [](const KeyStore::HostKeyInfo &info, bool changed) {
+            return decideHostKey(info, changed);
+        });
     m_copyWorker = worker;
     connect(worker, &TransferSession::transferProgress, this, &SftpWidget::onTransferProgress);
     connect(worker, &TransferSession::transferFinished, this,
@@ -286,9 +312,25 @@ void SftpWidget::ensureRemoteDir(const QString &path)
     }
 }
 
-void SftpWidget::listDirTree(const QString &path)
+void SftpWidget::listDirTree(const QString &path, int maxDepth)
 {
-    m_sftp->listDirRecursive(path);
+    m_sftp->listDirRecursive(path, maxDepth);
+}
+
+void SftpWidget::cancelTreeWalk()
+{
+    m_sftp->cancelTransfer();
+}
+
+void SftpWidget::openRemoteSearch()
+{
+    if (!m_searchDialog) {
+        m_searchDialog = new RemoteSearchDialog(this, this);
+        m_searchDialog->setAttribute(Qt::WA_DeleteOnClose);
+    }
+    m_searchDialog->show();
+    m_searchDialog->raise();
+    m_searchDialog->activateWindow();
 }
 
 void SftpWidget::trackTransfer(const QString &remotePath, TransferRegistry::Direction direction, bool quiet)
@@ -335,7 +377,27 @@ void SftpWidget::onContextMenu(const QPoint &pos)
     downloadAction->setEnabled(!selection.isEmpty());
     QAction *uploadAction = menu.addAction(tr("Upload files here…"));
     QAction *compareAction = menu.addAction(tr("Compare with local folder…"));
+    // PH3-12: recursive search from the current directory.
+    QAction *searchAction = menu.addAction(tr("Search in this folder…"));
+    searchAction->setEnabled(!m_currentPath.isEmpty());
     menu.addSeparator();
+    // PH3-11: edit a single regular file in the system editor (saves are
+    // uploaded back automatically).
+    QAction *editAction = nullptr;
+    QAction *stopEditAction = nullptr;
+    if (selection.size() == 1 && !selection.first().isDir) {
+        const QString remotePath = remoteJoin(m_currentPath, selection.first().name);
+        if (RemoteEditManager::instance().isEdited(editSessionKey(), remotePath)) {
+            stopEditAction = menu.addAction(tr("Stop Editing '%1'").arg(selection.first().name));
+        } else {
+            editAction = menu.addAction(tr("Edit '%1'").arg(selection.first().name));
+        }
+    }
+    // PH3-14: unix permission editor for exactly one entry.
+    QAction *permAction = nullptr;
+    if (selection.size() == 1) {
+        permAction = menu.addAction(tr("Permissions…"));
+    }
     QAction *mkdirAction = menu.addAction(tr("New folder…"));
     QAction *renameAction = menu.addAction(tr("Rename…"));
     renameAction->setEnabled(selection.size() == 1);
@@ -351,6 +413,25 @@ void SftpWidget::onContextMenu(const QPoint &pos)
         uploadFiles();
     } else if (chosen == compareAction) {
         emit compareRequested();
+    } else if (chosen == searchAction) {
+        openRemoteSearch();
+    } else if (chosen == editAction) {
+        editRemote(selection.first());
+    } else if (chosen == permAction) {
+        const SftpFileInfo &entry = selection.first();
+        const QString remotePath = remoteJoin(m_currentPath, entry.name);
+        PermissionsDialog dialog(remotePath, entry, this);
+        connect(&dialog, &PermissionsDialog::applied, this,
+                [this, remotePath](quint32 mode, bool recursive) {
+                    if (recursive) {
+                        m_sftp->setPermissionsRecursive(remotePath, mode);
+                    } else {
+                        m_sftp->setPermissions(remotePath, mode);
+                    }
+                });
+        dialog.exec();
+    } else if (chosen == stopEditAction) {
+        stopEditing(remoteJoin(m_currentPath, selection.first().name));
     } else if (chosen == mkdirAction) {
         mkdirDialog();
     } else if (chosen == renameAction && selection.size() == 1) {
@@ -481,6 +562,91 @@ void SftpWidget::deleteEntries(const QList<SftpFileInfo> &entries)
     }
 }
 
+QString SftpWidget::editSessionKey() const
+{
+    return QStringLiteral("%1@%2:%3").arg(m_config.username(), m_config.host()).arg(m_config.port());
+}
+
+void SftpWidget::editRemote(const SftpFileInfo &entry)
+{
+    if (entry.isDir || m_currentPath.isEmpty()) {
+        return;
+    }
+
+    const QString remotePath = remoteJoin(m_currentPath, entry.name);
+    auto &manager = RemoteEditManager::instance();
+
+    // Already being edited: just re-open the editor on the same local copy.
+    const QString existing = manager.localPathFor(editSessionKey(), remotePath);
+    if (!existing.isEmpty()) {
+        if (QFileInfo::exists(existing)) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(existing));
+            return;
+        }
+        // Local copy vanished out from under us: reset and re-download.
+        manager.endEdit(editSessionKey(), remotePath);
+    }
+
+    // %TEMP%/hssh-edit/<session>/<hash>_<name>: same file re-edits in place,
+    // the hash keeps same-named files in different directories apart.
+    QString safeSession = editSessionKey();
+    safeSession.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]+")), QStringLiteral("_"));
+    const QString hash = QString::fromLatin1(
+        QCryptographicHash::hash(remotePath.toUtf8(), QCryptographicHash::Sha1)
+            .toHex()
+            .left(8));
+    const QString localDir = QDir::temp().filePath(QStringLiteral("hssh-edit/") + safeSession);
+    QDir().mkpath(localDir);
+    const QString localPath = localDir + QLatin1Char('/') + hash + QLatin1Char('_') + entry.name;
+
+    QString conflict;
+    if (!manager.startEdit(editSessionKey(), remotePath, localPath, entry.permissions, &conflict)) {
+        QMessageBox::warning(this, tr("Already editing"),
+                             tr("'%1' is already being edited in another tab:\n%2")
+                                 .arg(remotePath, conflict));
+        return;
+    }
+
+    m_pendingEditDownloads.insert(remotePath);
+    trackTransfer(remotePath, TransferRegistry::Direction::Download, true);
+    m_sftp->download(remotePath, localPath);
+}
+
+void SftpWidget::stopEditing(const QString &remotePath)
+{
+    RemoteEditManager::instance().endEdit(editSessionKey(), remotePath);
+    m_pendingEditDownloads.remove(remotePath);
+    m_editUploads.remove(remotePath);
+    m_statusLabel->setText(tr("Stopped editing %1 (the local copy stays in the temp folder)")
+                               .arg(remotePath));
+}
+
+void SftpWidget::onEditSaved(const QString &sessionKey, const QString &remotePath,
+                             const QString &localPath, quint32 permissions)
+{
+    if (sessionKey != editSessionKey()) {
+        return; // another session's tab owns this edit
+    }
+    m_editUploads.insert(remotePath, localPath);
+    trackTransfer(remotePath, TransferRegistry::Direction::Upload, true);
+    // Both calls queue onto the SFTP worker's event loop in order: the chmod
+    // runs after the upload finished (harmless if the upload failed).
+    m_sftp->upload(localPath, remotePath);
+    if (permissions != 0) {
+        m_sftp->setPermissions(remotePath, permissions);
+    }
+    m_statusLabel->setText(tr("Uploading edited %1…").arg(remotePath));
+}
+
+void SftpWidget::onEditGone(const QString &sessionKey, const QString &remotePath)
+{
+    if (sessionKey != editSessionKey()) {
+        return;
+    }
+    m_editUploads.remove(remotePath);
+    m_statusLabel->setText(tr("Local copy of %1 disappeared — edit stopped").arg(remotePath));
+}
+
 void SftpWidget::onOperationFinished(const QString &operation, bool ok, const QString &message)
 {
     if (!ok) {
@@ -554,7 +720,37 @@ void SftpWidget::onTransferFinished(const QString &path, bool ok, const QString 
         m_progress->deleteLater();
         m_progress = nullptr;
     }
-    if (!ok && message != tr("Cancelled")) {
+
+    // PH3-11: the initial edit download finished — arm the watcher and hand
+    // the file to the system editor.
+    if (m_pendingEditDownloads.contains(path)) {
+        m_pendingEditDownloads.remove(path);
+        const QString local = RemoteEditManager::instance().localPathFor(editSessionKey(), path);
+        if (ok && !local.isEmpty() && QFileInfo::exists(local)) {
+            RemoteEditManager::instance().beginWatch(local);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(local));
+            m_statusLabel->setText(tr("Editing %1 — saves upload automatically").arg(path));
+        } else {
+            RemoteEditManager::instance().endEdit(editSessionKey(), path);
+            m_statusLabel->setText(tr("Could not fetch %1 for editing: %2").arg(path, message));
+        }
+        emit transferDone(path, ok);
+        refresh();
+        return; // the edit status text above is the user-facing outcome
+    }
+
+    // PH3-11: an editor save was uploaded back — only now is the local mtime
+    // "synced" again (until then a further change would re-trigger).
+    if (m_editUploads.contains(path)) {
+        const QString local = m_editUploads.take(path);
+        if (ok) {
+            RemoteEditManager::instance().markSynced(local);
+            m_statusLabel->setText(tr("Uploaded edited %1").arg(path));
+        } else {
+            m_statusLabel->setText(tr("Auto-upload of %1 failed: %2 — saving again retries")
+                                       .arg(path, message));
+        }
+    } else if (!ok && message != tr("Cancelled")) {
         m_statusLabel->setText(tr("Transfer failed: %1").arg(message));
     } else {
         m_statusLabel->setText(tr("Transfer finished: %1").arg(path));

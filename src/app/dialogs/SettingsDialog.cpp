@@ -4,7 +4,11 @@
 
 #include <QCheckBox>
 #include <QColorDialog>
+#include <QApplication>
+#include <QCoreApplication>
 #include <QComboBox>
+#include <QApplication>
+#include <QCoreApplication>
 #include <QDialogButtonBox>
 #include <QFontComboBox>
 #include <QFormLayout>
@@ -13,6 +17,8 @@
 #include <QHeaderView>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMessageBox>
+#include <QProcess>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
@@ -45,11 +51,18 @@ void SettingsDialog::buildUi()
 
     const QVector<ConfigKey> keys = Config::registeredKeys();
 
+    // ConfigKey labels/groups/tooltips are static strings (registered
+    // without a tr() context) — route them through the "ConfigKeys" catalog
+    // so the settings pages localize too (falls back to the raw text).
+    const auto cfgText = [](const QString &text) {
+        return QCoreApplication::translate("ConfigKeys", text.toUtf8().constData());
+    };
+
     // Group keys by ConfigKey::group, preserving first-appearance order.
     QStringList groupOrder;
     QMap<QString, QVector<ConfigKey>> byGroup;
     for (const ConfigKey &key : keys) {
-        const QString group = key.group.isEmpty() ? tr("General") : key.group;
+        const QString group = key.group.isEmpty() ? tr("General") : cfgText(key.group);
         if (!byGroup.contains(group)) {
             groupOrder.append(group);
         }
@@ -68,10 +81,10 @@ void SettingsDialog::buildUi()
             if (!editor) {
                 continue;
             }
-            const QString label = key.label.isEmpty() ? key.key : key.label;
+            const QString label = key.label.isEmpty() ? key.key : cfgText(key.label);
             form->addRow(label + QLatin1Char(':'), editor);
             if (!key.tooltip.isEmpty()) {
-                editor->setToolTip(key.tooltip);
+                editor->setToolTip(cfgText(key.tooltip));
             }
             m_rows.append({key, editor, original});
         }
@@ -187,14 +200,33 @@ QVariant SettingsDialog::readEditor(const Row &row) const
 
 void SettingsDialog::applyChanges()
 {
+    bool languageChanged = false;
     for (const Row &row : m_rows) {
         const QVariant newValue = readEditor(row);
         if (newValue == row.original) {
             continue;
         }
         Config::instance().setValue(row.key.key, newValue);
+        if (row.key.key == QLatin1String("ui/language")) {
+            languageChanged = true;
+        }
     }
     Config::instance().sync();
+
+    // The interface language only loads at startup (Qt has no global
+    // retranslate); offer an immediate restart instead of a silent surprise.
+    if (languageChanged) {
+        const auto answer = QMessageBox::question(
+            this, tr("Language changed"),
+            tr("The interface language takes effect after a restart. Restart now?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+        if (answer == QMessageBox::Yes) {
+            const QString exe = QCoreApplication::applicationFilePath();
+            const QStringList args = QCoreApplication::arguments().mid(1);
+            QProcess::startDetached(exe, args);
+            QApplication::quit();
+        }
+    }
 }
 
 } // namespace hssh

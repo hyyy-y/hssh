@@ -64,9 +64,11 @@ public:
     bool guiLaunching = false; // one auto-launch at a time
     QThread stdinThread;
     StdinReader *reader = nullptr;
+    // B5-3: Http-transport response sink (empty in Stdio mode).
+    std::function<void(const QJsonObject &)> messageSink;
 };
 
-AgentMcpServer::AgentMcpServer(QObject *parent)
+AgentMcpServer::AgentMcpServer(QObject *parent, Transport transport)
     : QObject(parent)
     , d(std::make_unique<Impl>())
 {
@@ -75,6 +77,9 @@ AgentMcpServer::AgentMcpServer(QObject *parent)
     const QByteArray envUrl = qgetenv("HSSH_AGENT_URL");
     if (!envUrl.isEmpty()) {
         d->baseUrl = QString::fromUtf8(envUrl);
+    }
+    if (transport == Transport::Http) {
+        return; // no stdio: messages arrive via handleIncoming()
     }
     d->reader = new StdinReader();
     d->reader->moveToThread(&d->stdinThread);
@@ -91,8 +96,20 @@ AgentMcpServer::AgentMcpServer(QObject *parent)
 
 AgentMcpServer::~AgentMcpServer()
 {
-    d->stdinThread.quit();
-    d->stdinThread.wait();
+    if (d->stdinThread.isRunning()) {
+        d->stdinThread.quit();
+        d->stdinThread.wait();
+    }
+}
+
+void AgentMcpServer::setMessageSink(const std::function<void(const QJsonObject &)> &sink)
+{
+    d->messageSink = sink;
+}
+
+void AgentMcpServer::handleIncoming(const QByteArray &json)
+{
+    handleMessage(json);
 }
 
 // ---------------------------------------------------------------------------
@@ -493,6 +510,68 @@ void AgentMcpServer::handleMessage(const QByteArray &line)
                 QStringLiteral("Close the session's terminal tab in the GUI"),
                 disconnectSchema);
 
+        QJsonObject forwardProperties;
+        sessionProp(forwardProperties);
+        forwardProperties[QStringLiteral("type")] =
+            QJsonObject{{QStringLiteral("type"), QStringLiteral("string")},
+                        {QStringLiteral("enum"), QJsonArray{QStringLiteral("local"),
+                                                            QStringLiteral("remote"),
+                                                            QStringLiteral("dynamic")}},
+                        {QStringLiteral("description"),
+                         QStringLiteral("local: listen locally, forward over SSH; remote: server "
+                                        "listens; dynamic: SOCKS5 proxy")}};
+        forwardProperties[QStringLiteral("bindAddress")] =
+            QJsonObject{{QStringLiteral("type"), QStringLiteral("string")},
+                        {QStringLiteral("description"), QStringLiteral("default 127.0.0.1")}};
+        forwardProperties[QStringLiteral("bindPort")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")}};
+        forwardProperties[QStringLiteral("targetHost")] =
+            QJsonObject{{QStringLiteral("type"), QStringLiteral("string")},
+                        {QStringLiteral("description"),
+                         QStringLiteral("required for local/remote (not dynamic)")}};
+        forwardProperties[QStringLiteral("targetPort")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")}};
+        QJsonObject forwardSchema;
+        forwardSchema[QStringLiteral("type")] = QStringLiteral("object");
+        forwardSchema[QStringLiteral("properties")] = forwardProperties;
+        forwardSchema[QStringLiteral("required")] = QJsonArray{QStringLiteral("session"),
+                                                               QStringLiteral("bindPort")};
+
+        addTool(QStringLiteral("ssh_forward"),
+                QStringLiteral("Add a port forward on the session's SSH connection. local: this "
+                               "machine listens on bindPort and tunnels to targetHost:targetPort "
+                               "through the server; remote: the server listens on bindPort; "
+                               "dynamic: SOCKS5 proxy on bindPort. Returns the listen address and "
+                               "the full forward list. Use ssh_list_forwards / ssh_remove_forward "
+                               "to manage them."),
+                forwardSchema);
+
+        QJsonObject listForwardsProperties;
+        sessionProp(listForwardsProperties);
+        QJsonObject listForwardsSchema;
+        listForwardsSchema[QStringLiteral("type")] = QStringLiteral("object");
+        listForwardsSchema[QStringLiteral("properties")] = listForwardsProperties;
+        listForwardsSchema[QStringLiteral("required")] = QJsonArray{QStringLiteral("session")};
+
+        addTool(QStringLiteral("ssh_list_forwards"),
+                QStringLiteral("List the session's active port forwards "
+                               "([{index,type,bindAddress,bindPort,target,active,status}])"),
+                listForwardsSchema);
+
+        QJsonObject removeForwardProperties;
+        sessionProp(removeForwardProperties);
+        removeForwardProperties[QStringLiteral("index")] =
+            QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")},
+                        {QStringLiteral("description"),
+                         QStringLiteral("forward index from ssh_list_forwards")}};
+        QJsonObject removeForwardSchema;
+        removeForwardSchema[QStringLiteral("type")] = QStringLiteral("object");
+        removeForwardSchema[QStringLiteral("properties")] = removeForwardProperties;
+        removeForwardSchema[QStringLiteral("required")] = QJsonArray{QStringLiteral("session"),
+                                                                     QStringLiteral("index")};
+
+        addTool(QStringLiteral("ssh_remove_forward"),
+                QStringLiteral("Remove one port forward (index from ssh_list_forwards)"),
+                removeForwardSchema);
+
         addTool(QStringLiteral("get_public_key"),
                 QStringLiteral("Get the hssh agent RSA public key for encrypting passwords"),
                 emptySchema);
@@ -705,6 +784,8 @@ void AgentMcpServer::handleToolCall(const QString &name, const QJsonObject &argu
         {QStringLiteral("ssh_download"), true}, {QStringLiteral("ssh_send"), true},
         {QStringLiteral("ssh_read"), true},     {QStringLiteral("ssh_transfer_status"), true},
         {QStringLiteral("ssh_transfer_cancel"), true},
+        {QStringLiteral("ssh_forward"), true},  {QStringLiteral("ssh_list_forwards"), true},
+        {QStringLiteral("ssh_remove_forward"), true},
         {QStringLiteral("get_public_key"), true},
     };
     if (!known.contains(name)) {
@@ -956,6 +1037,113 @@ void AgentMcpServer::handleBridgedTool(const QString &name, const QJsonObject &a
             return;
         }
 
+        if (name == QStringLiteral("ssh_forward")) {
+            const QString type = arguments.value(QStringLiteral("type")).toString(
+                QStringLiteral("local"));
+            QJsonObject body{{QStringLiteral("type"), type},
+                             {QStringLiteral("bindPort"),
+                              arguments.value(QStringLiteral("bindPort")).toInt()}};
+            if (!arguments.value(QStringLiteral("bindAddress")).toString().isEmpty()) {
+                body[QStringLiteral("bindAddress")] =
+                    arguments.value(QStringLiteral("bindAddress")).toString();
+            }
+            if (!arguments.value(QStringLiteral("targetHost")).toString().isEmpty()) {
+                body[QStringLiteral("targetHost")] =
+                    arguments.value(QStringLiteral("targetHost")).toString();
+            }
+            if (arguments.contains(QStringLiteral("targetPort"))) {
+                body[QStringLiteral("targetPort")] =
+                    arguments.value(QStringLiteral("targetPort")).toInt();
+            }
+            restCall("POST", QStringLiteral("/api/v1/tabs/%1/forward").arg(encoded), body,
+                     15000, [=, this](int status, const QJsonObject &fwdBody) {
+                if (status != 200) {
+                    respondRestError(rpcId, status, fwdBody);
+                    return;
+                }
+                AgentAudit::log(AgentAudit::Source::Mcp, name, detail,
+                                QStringLiteral("ok listen=%1")
+                                    .arg(fwdBody.value(QStringLiteral("listen")).toString()));
+                QJsonObject result;
+                result[QStringLiteral("ok")] = true;
+                result[QStringLiteral("listen")] = fwdBody.value(QStringLiteral("listen"));
+                result[QStringLiteral("forwards")] = fwdBody.value(QStringLiteral("forwards"));
+                if (!fwdBody.value(QStringLiteral("target")).toString().isEmpty()) {
+                    result[QStringLiteral("target")] = fwdBody.value(QStringLiteral("target"));
+                }
+                const QString text = QStringLiteral(
+                    "forwarding %1 (%2) on %3")
+                    .arg(fwdBody.value(QStringLiteral("listen")).toString(), type,
+                         fwdBody.value(QStringLiteral("target")).toString());
+                QJsonArray content;
+                content.append(makeTextContent(text));
+                result[QStringLiteral("content")] = content;
+                respondId(rpcId, result);
+            });
+            return;
+        }
+
+        if (name == QStringLiteral("ssh_list_forwards")) {
+            restCall("GET", QStringLiteral("/api/v1/tabs/%1/forward").arg(encoded), QJsonObject(),
+                     15000, [=, this](int status, const QJsonObject &fwdBody) {
+                if (status != 200) {
+                    respondRestError(rpcId, status, fwdBody);
+                    return;
+                }
+                const QJsonArray forwards = fwdBody.value(QStringLiteral("forwards")).toArray();
+                AgentAudit::log(AgentAudit::Source::Mcp, name, detail,
+                                QStringLiteral("ok count=%1").arg(forwards.size()));
+                QStringList lines;
+                for (const QJsonValue &v : forwards) {
+                    const QJsonObject f = v.toObject();
+                    lines.append(QStringLiteral("#%1 %2 %3:%4 -> %5 [%6]")
+                                     .arg(f.value(QStringLiteral("index")).toInt())
+                                     .arg(f.value(QStringLiteral("type")).toString(),
+                                          f.value(QStringLiteral("bindAddress")).toString())
+                                     .arg(f.value(QStringLiteral("bindPort")).toInt())
+                                     .arg(f.value(QStringLiteral("target")).toString(
+                                          QStringLiteral("(socks)")))
+                                     .arg(f.value(QStringLiteral("status")).toString()));
+                }
+                const QString text = forwards.isEmpty()
+                    ? QStringLiteral("no forwards on %1")
+                          .arg(fwdBody.value(QStringLiteral("target")).toString())
+                    : lines.join(QLatin1Char('\n'));
+                QJsonObject result;
+                result[QStringLiteral("forwards")] = forwards;
+                QJsonArray content;
+                content.append(makeTextContent(text));
+                result[QStringLiteral("content")] = content;
+                respondId(rpcId, result);
+            });
+            return;
+        }
+
+        if (name == QStringLiteral("ssh_remove_forward")) {
+            const int forwardIndex = arguments.value(QStringLiteral("index")).toInt(-1);
+            if (forwardIndex < 0) {
+                respondErrorId(rpcId, -32602,
+                               QStringLiteral("Missing required argument: index (>= 0)"));
+                return;
+            }
+            restCall("DELETE",
+                     QStringLiteral("/api/v1/tabs/%1/forward?index=%2").arg(encoded).arg(forwardIndex),
+                     QJsonObject(), 15000, [=, this](int status, const QJsonObject &fwdBody) {
+                if (status != 200) {
+                    respondRestError(rpcId, status, fwdBody);
+                    return;
+                }
+                AgentAudit::log(AgentAudit::Source::Mcp, name, detail, QStringLiteral("ok"));
+                QJsonObject result;
+                result[QStringLiteral("ok")] = true;
+                QJsonArray content;
+                content.append(makeTextContent(QStringLiteral("removed forward #%1").arg(forwardIndex)));
+                result[QStringLiteral("content")] = content;
+                respondId(rpcId, result);
+            });
+            return;
+        }
+
         if (name == QStringLiteral("ssh_upload") || name == QStringLiteral("ssh_download")) {
             const bool isUpload = name == QStringLiteral("ssh_upload");
             const QString localPath = arguments.value(QStringLiteral("local_path")).toString();
@@ -1185,6 +1373,10 @@ void AgentMcpServer::respondErrorId(const QJsonValue &id, int code, const QStrin
 
 void AgentMcpServer::sendMessage(const QJsonObject &message)
 {
+    if (d->messageSink) {
+        d->messageSink(message);
+        return;
+    }
     QTextStream out(stdout);
     out << QString::fromUtf8(QJsonDocument(message).toJson(QJsonDocument::Compact)) << '\n';
     out.flush();

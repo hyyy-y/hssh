@@ -73,6 +73,14 @@ public:
     void sudoAsync(int index, const QString &command, const QString &secret,
                    bool useStoredCredential, int timeoutMs,
                    const AgentTabsInterface::SudoAsyncCallback &cb) override;
+    // B5-1: port forwarding on an SSH tab (backs /tabs/<ref>/forward and the
+    // MCP ssh_forward tools).
+    bool addForwardToTab(int index, const QVariantMap &spec, QString *errorMessage) override;
+    QVariantList listForwardsForTab(int index) const override;
+    bool removeForwardFromTab(int index, int forwardIndex, QString *errorMessage) override;
+    // B5-2: AgentPolicy "ask" consent dialog (async, ~30 s auto-reject).
+    void confirmPolicyAsync(int index, const QString &operation, const QString &detail,
+                            const AgentTabsInterface::PolicyCallback &cb) override;
 
     // Starts the local agent API if not already running (idempotent). Used
     // by the --agent CLI flag: the MCP bridge auto-launches the GUI this way.
@@ -182,6 +190,7 @@ protected:
     QDockWidget *m_fileDock = nullptr;
     QDockWidget *m_transfersDock = nullptr;
     QDockWidget *m_outlineDock = nullptr;
+    QDockWidget *m_monitorDock = nullptr; // B6-1: server monitor
     QLabel *m_sessionInfoLabel = nullptr;
     QLabel *m_termSizeLabel = nullptr;
     QTabWidget *m_tabWidget = nullptr;

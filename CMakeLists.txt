@@ -102,7 +102,11 @@ set(HSSH_SOURCES
     src/agent/AgentHttpServer.h
     src/agent/AgentMcpServer.cpp
     src/agent/AgentMcpServer.h
+    src/agent/AgentPolicy.cpp
+    src/agent/AgentPolicy.h
     src/agent/AgentSudoAuth.h
+    src/agent/AgentWebSocketServer.cpp
+    src/agent/AgentWebSocketServer.h
     src/app/InputBroadcaster.cpp
     src/app/InputBroadcaster.h
     src/app/MainWindow.cpp
@@ -129,6 +133,20 @@ set(HSSH_SOURCES
     src/app/dialogs/PortForwardDialog.h
     src/app/dialogs/SessionLogViewer.cpp
     src/app/dialogs/SessionLogViewer.h
+    src/app/dialogs/RemoteSearchDialog.cpp
+    src/app/dialogs/RemoteSearchDialog.h
+    src/app/dialogs/PermissionsDialog.cpp
+    src/app/dialogs/PermissionsDialog.h
+    src/app/dialogs/ProcessDialog.cpp
+    src/app/dialogs/ProcessDialog.h
+    src/app/dialogs/DockerDialog.cpp
+    src/app/dialogs/DockerDialog.h
+    src/app/dialogs/NetworkToolsDialog.cpp
+    src/app/dialogs/NetworkToolsDialog.h
+    src/app/dialogs/SchedulerDialog.cpp
+    src/app/dialogs/SchedulerDialog.h
+    src/app/dialogs/ServerTransferDialog.cpp
+    src/app/dialogs/ServerTransferDialog.h
     src/app/dialogs/SettingsDialog.cpp
     src/app/dialogs/SettingsDialog.h
     src/app/widgets/DiffView.cpp
@@ -149,6 +167,10 @@ set(HSSH_SOURCES
     src/app/widgets/TransfersWidget.h
     src/app/TransferRegistry.cpp
     src/app/TransferRegistry.h
+    src/app/RemoteEditManager.cpp
+    src/app/RemoteEditManager.h
+    src/app/GuiHostKeyPrompt.cpp
+    src/app/GuiHostKeyPrompt.h
     src/core/ConnectionManager.cpp
     src/core/ConnectionManager.h
     src/core/KeyStore.cpp
@@ -165,6 +187,12 @@ set(HSSH_SOURCES
     src/core/SftpSession.h
     src/core/ChannelCopySession.cpp
     src/core/ChannelCopySession.h
+    src/core/RemoteCommandChannel.cpp
+    src/core/RemoteCommandChannel.h
+    src/app/ServerMonitor.cpp
+    src/app/ServerMonitor.h
+    src/app/widgets/MonitorWidget.cpp
+    src/app/widgets/MonitorWidget.h
     src/core/TransferSession.h
     src/core/SshConnect.cpp
     src/core/SshConnect.h

@@ -78,10 +78,10 @@ void SftpSession::listDir(const QString &path)
     }, Qt::QueuedConnection);
 }
 
-void SftpSession::listDirRecursive(const QString &path)
+void SftpSession::listDirRecursive(const QString &path, int maxDepth)
 {
-    QMetaObject::invokeMethod(this, [this, path]() {
-        doListDirRecursive(path);
+    QMetaObject::invokeMethod(this, [this, path, maxDepth]() {
+        doListDirRecursive(path, maxDepth);
     }, Qt::QueuedConnection);
 }
 
@@ -117,6 +117,20 @@ void SftpSession::removeDir(const QString &path)
 {
     QMetaObject::invokeMethod(this, [this, path]() {
         doRemoveDir(path);
+    }, Qt::QueuedConnection);
+}
+
+void SftpSession::setPermissions(const QString &path, quint32 mode)
+{
+    QMetaObject::invokeMethod(this, [this, path, mode]() {
+        doSetPermissions(path, mode);
+    }, Qt::QueuedConnection);
+}
+
+void SftpSession::setPermissionsRecursive(const QString &path, quint32 mode)
+{
+    QMetaObject::invokeMethod(this, [this, path, mode]() {
+        doSetPermissionsRecursive(path, mode);
     }, Qt::QueuedConnection);
 }
 
@@ -156,10 +170,15 @@ QString SftpSession::sftpError() const
     return message;
 }
 
+void SftpSession::setHostKeyVerifier(const KeyStore::HostKeyVerifier &verifier)
+{
+    m_hostKeyVerifier = verifier;
+}
+
 void SftpSession::doConnect()
 {
     QString error;
-    m_ssh = sshConnectAndAuthenticate(m_config, &error);
+    m_ssh = sshConnectAndAuthenticate(m_config, &error, 0, m_hostKeyVerifier);
     if (!m_ssh) {
         emit errorOccurred(error);
         return;
@@ -205,6 +224,10 @@ void SftpSession::doListDir(const QString &path)
             info.mtime = static_cast<qint64>(attr->mtime);
             info.permissions = attr->permissions;
             info.isDir = attr->type == SSH_FILEXFER_TYPE_DIRECTORY;
+            // Owner/group arrive as strings when the server sends the
+            // OWNERGROUP attribute (display only; chown stays sudo-gated).
+            info.owner = attr->owner ? QString::fromUtf8(attr->owner) : QString();
+            info.group = attr->group ? QString::fromUtf8(attr->group) : QString();
             entries.append(info);
         }
         sftp_attributes_free(attr);
@@ -284,6 +307,70 @@ void SftpSession::doRemoveDir(const QString &path)
     const int rc = sftp_rmdir(m_sftp, path.toUtf8().constData());
     emit operationFinished(QStringLiteral("rmdir"), rc == SSH_OK,
                            rc == SSH_OK ? QString() : sftpError());
+}
+
+void SftpSession::doSetPermissions(const QString &path, quint32 mode)
+{
+    if (!m_sftp) {
+        emit errorOccurred(tr("SFTP session is not connected"));
+        return;
+    }
+    const int rc = sftp_chmod(m_sftp, path.toUtf8().constData(), mode);
+    emit operationFinished(QStringLiteral("chmod"), rc == SSH_OK,
+                           rc == SSH_OK ? QString() : sftpError());
+}
+
+void SftpSession::doSetPermissionsRecursive(const QString &path, quint32 mode)
+{
+    if (!m_sftp) {
+        emit errorOccurred(tr("SFTP session is not connected"));
+        return;
+    }
+
+    // Walk inside the worker (no separate listing round-trip through the
+    // GUI), then chmod every entry; the walk already reports progress.
+    QList<RemoteFileEntry> entries;
+    QString error;
+    m_treeWalkCount = 0;
+    m_treeWalkPath = path;
+    m_cancelTransfer = false;
+    if (!collectRemoteFiles(path, QString(), entries, error, true)) {
+        emit errorOccurred(tr("Recursive chmod failed while listing %1: %2").arg(path, error));
+        return;
+    }
+
+    int failed = 0;
+    QString firstError;
+    for (const RemoteFileEntry &entry : entries) {
+        if (m_cancelTransfer) {
+            emit operationFinished(QStringLiteral("chmod"), false, tr("Cancelled"));
+            return;
+        }
+        if (sftp_chmod(m_sftp, entry.remotePath.toUtf8().constData(), mode) != SSH_OK) {
+            ++failed;
+            if (firstError.isEmpty()) {
+                firstError = tr("%1: %2").arg(entry.remotePath, sftpError());
+            }
+        }
+    }
+    // The root itself is not part of the walk results.
+    if (sftp_chmod(m_sftp, path.toUtf8().constData(), mode) != SSH_OK) {
+        ++failed;
+        if (firstError.isEmpty()) {
+            firstError = sftpError();
+        }
+    }
+
+    if (failed == 0) {
+        emit operationFinished(QStringLiteral("chmod"), true,
+                               tr("%1 entries updated").arg(entries.size() + 1));
+    } else {
+        emit operationFinished(QStringLiteral("chmod"), false,
+                               tr("%1 of %2 entries failed (first: %3)")
+                                   .arg(failed)
+                                   .arg(entries.size() + 1)
+                                   .arg(firstError));
+    }
 }
 
 bool SftpSession::streamDownload(const QString &remoteFile, QFile &local,
@@ -537,7 +624,7 @@ bool SftpSession::downloadAttempt(const QString &remotePath, const QString &loca
 
 bool SftpSession::collectRemoteFiles(const QString &remoteDir, const QString &relDir,
                                      QList<RemoteFileEntry> &out, QString &error,
-                                     bool includeDirs)
+                                     bool includeDirs, int depth, int maxDepth)
 {
     sftp_dir dir = sftp_opendir(m_sftp, remoteDir.toUtf8().constData());
     if (!dir) {
@@ -568,7 +655,12 @@ bool SftpSession::collectRemoteFiles(const QString &remoteDir, const QString &re
             if (includeDirs) {
                 out.append({remoteChild, relChild, 0, mtime, true});
             }
-            ok = collectRemoteFiles(remoteChild, relChild, out, error, includeDirs);
+            // maxDepth 0 = unlimited; otherwise stop descending at the limit
+            // (saves the network round-trips the filters would discard).
+            if (maxDepth <= 0 || depth < maxDepth) {
+                ok = collectRemoteFiles(remoteChild, relChild, out, error,
+                                        includeDirs, depth + 1, maxDepth);
+            }
         } else {
             out.append({remoteChild, relChild, size, mtime, false});
         }
@@ -589,7 +681,7 @@ bool SftpSession::collectRemoteFiles(const QString &remoteDir, const QString &re
     return ok;
 }
 
-void SftpSession::doListDirRecursive(const QString &path)
+void SftpSession::doListDirRecursive(const QString &path, int maxDepth)
 {
     if (!m_sftp) {
         emit errorOccurred(tr("SFTP session is not connected"));
@@ -599,7 +691,10 @@ void SftpSession::doListDirRecursive(const QString &path)
     QString error;
     m_treeWalkCount = 0;
     m_treeWalkPath = path;
-    if (!collectRemoteFiles(path, QString(), entries, error, true)) {
+    // A cancel flag left over from a previous transfer would abort this walk
+    // on its first entry — every walk starts cancellable, not pre-cancelled.
+    m_cancelTransfer = false;
+    if (!collectRemoteFiles(path, QString(), entries, error, true, 0, maxDepth)) {
         emit errorOccurred(error);
         return;
     }
@@ -1009,7 +1104,7 @@ bool SftpSession::reconnectSftp()
     // SFTP needs unbounded post-connect blocking calls (default 0): a
     // bounded channel write is a silent short write -> corruption.
     QString error;
-    m_ssh = sshConnectAndAuthenticate(m_config, &error);
+    m_ssh = sshConnectAndAuthenticate(m_config, &error, 0, m_hostKeyVerifier);
     if (!m_ssh) {
         return false;
     }

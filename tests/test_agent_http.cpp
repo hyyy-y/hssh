@@ -8,6 +8,9 @@
 // via sendInputToTab is echoed and "executed" (markers recognized).
 
 #include "agent/AgentHttpServer.h"
+#include "agent/AgentPolicy.h"
+#include "agent/AgentSudoAuth.h"
+#include "utils/Config.h"
 
 #include <QEventLoop>
 #include <QJsonArray>
@@ -194,7 +197,10 @@ public:
             return {};
         }
         const QVariantMap &m = entries.at(index);
-        SessionConfig config;
+        // STABLE id derived from the name: SessionConfig() would mint a
+        // fresh UUID per call, so AgentPolicy/AgentSudoAuth identities
+        // (which key on the id for saved sessions) would never match.
+        SessionConfig config(QStringLiteral("fake-") + m.value(QStringLiteral("sessionName")).toString());
         config.setName(m.value(QStringLiteral("sessionName")).toString());
         config.setHost(m.value(QStringLiteral("host")).toString());
         const int port = m.value(QStringLiteral("port")).toInt();
@@ -222,6 +228,108 @@ public:
         r.confirmed = false;
         r.reason = QStringLiteral("user_rejected");
         cb(r);
+    }
+
+    // B5-1: in-memory forward bookkeeping mirroring MainWindow's validation
+    // (the /forward routes are what these tests exercise).
+    QHash<int, QList<QVariantMap>> forwards; // tab index -> forward list
+    bool addForwardToTab(int index, const QVariantMap &spec, QString *errorMessage) override
+    {
+        const auto fail = [errorMessage](const QString &what) {
+            if (errorMessage) {
+                *errorMessage = what;
+            }
+            return false;
+        };
+        if (index < 0 || index >= entries.size()) {
+            return fail(QStringLiteral("unknown_tab"));
+        }
+        if (entries.at(index).value(QStringLiteral("type")).toString() != QLatin1String("ssh")) {
+            return fail(QStringLiteral("not_an_ssh_tab"));
+        }
+        const QString type = spec.value(QStringLiteral("type")).toString();
+        if (!type.isEmpty() && type != QLatin1String("local") && type != QLatin1String("remote")
+            && type != QLatin1String("dynamic")) {
+            return fail(QStringLiteral("type must be local, remote or dynamic"));
+        }
+        const int bindPort = spec.value(QStringLiteral("bindPort")).toInt();
+        if (bindPort < 1 || bindPort > 65535) {
+            return fail(QStringLiteral("bindPort must be 1-65535"));
+        }
+        const QString effectiveType = type.isEmpty() ? QStringLiteral("local") : type;
+        if (effectiveType != QLatin1String("dynamic")) {
+            if (spec.value(QStringLiteral("targetHost")).toString().isEmpty()
+                || spec.value(QStringLiteral("targetPort")).toInt() < 1) {
+                return fail(QStringLiteral("targetHost and targetPort are required"));
+            }
+        }
+        QVariantMap f;
+        f[QStringLiteral("type")] = effectiveType;
+        f[QStringLiteral("bindAddress")] =
+            spec.value(QStringLiteral("bindAddress"), QStringLiteral("127.0.0.1"));
+        f[QStringLiteral("bindPort")] = bindPort;
+        f[QStringLiteral("target")] = effectiveType == QLatin1String("dynamic")
+            ? QString()
+            : QStringLiteral("%1:%2")
+                  .arg(spec.value(QStringLiteral("targetHost")).toString())
+                  .arg(spec.value(QStringLiteral("targetPort")).toInt());
+        f[QStringLiteral("active")] = true;
+        f[QStringLiteral("status")] = QStringLiteral("listening");
+        forwards[index].append(f);
+        return true;
+    }
+    QVariantList listForwardsForTab(int index) const override
+    {
+        QVariantList result;
+        if (index < 0 || index >= entries.size()
+            || entries.at(index).value(QStringLiteral("type")).toString() != QLatin1String("ssh")) {
+            return result;
+        }
+        const QList<QVariantMap> list = forwards.value(index);
+        for (int i = 0; i < list.size(); ++i) {
+            QVariantMap f = list.at(i);
+            f[QStringLiteral("index")] = i;
+            result.append(f);
+        }
+        return result;
+    }
+    bool removeForwardFromTab(int index, int forwardIndex, QString *errorMessage) override
+    {
+        if (index < 0 || index >= entries.size()
+            || entries.at(index).value(QStringLiteral("type")).toString() != QLatin1String("ssh")) {
+            if (errorMessage) *errorMessage = QStringLiteral("not_an_ssh_tab");
+            return false;
+        }
+        if (forwardIndex < 0 || forwardIndex >= forwards.value(index).size()) {
+            if (errorMessage) *errorMessage = QStringLiteral("forward index out of range");
+            return false;
+        }
+        forwards[index].removeAt(forwardIndex);
+        return true;
+    }
+
+    // B5-2: scripted policy answers. Default AllowOnce keeps the pre-policy
+    // test semantics (requests pass; policyAsks counts the dialogs).
+    enum class PolicyAnswerKind { Reject, AllowOnce, AllowAlways, Timeout };
+    PolicyAnswerKind policyAnswer = PolicyAnswerKind::AllowOnce;
+    int policyAsks = 0;
+    void confirmPolicyAsync(int index, const QString &, const QString &,
+                            const AgentTabsInterface::PolicyCallback &cb) override
+    {
+        ++policyAsks;
+        AgentTabsInterface::PolicyAnswer a;
+        if (index < 0 || index >= entries.size()
+            || entries.at(index).value(QStringLiteral("type")).toString() != QLatin1String("ssh")) {
+            a.reason = QStringLiteral("unknown_tab");
+        } else {
+            switch (policyAnswer) {
+            case PolicyAnswerKind::AllowOnce: a.allowed = true; break;
+            case PolicyAnswerKind::AllowAlways: a.allowed = true; a.always = true; break;
+            case PolicyAnswerKind::Timeout: a.reason = QStringLiteral("timeout"); break;
+            case PolicyAnswerKind::Reject: a.reason = QStringLiteral("user_rejected"); break;
+            }
+        }
+        cb(a);
     }
 };
 
@@ -302,6 +410,9 @@ private slots:
     void disconnectUnlocksExec();
     void reconnectRoute();
     void execResetOption();
+    void forwardRoutes();
+    void policyGate();
+    void mcpHttpEndpoint();
 
 private:
     AgentHttpServer *m_server = nullptr;
@@ -852,6 +963,263 @@ void TestAgentHttp::execResetOption()
     QCOMPARE(m_tabs.rawInputs.at(before), QStringLiteral("\u0003"));
     QVERIFY(m_tabs.rawInputs.at(before + 1).startsWith(
         QStringLiteral("\necho __HSSH_EXEC_B_")));
+}
+
+void TestAgentHttp::forwardRoutes()
+{
+    // Earlier cases close tabs; work on dedicated tabs appended here so the
+    // refs are valid no matter what ran before.
+    m_tabs.entries.append(sshTab(QStringLiteral("fwd-host"), QStringLiteral("10.1.1.1"),
+                                 QStringLiteral("fwd-host")));
+    m_tabs.entries.append(localTab(QStringLiteral("fwd-local")));
+    const int sshIndex = m_tabs.entries.size() - 2;
+    const int localIndex = sshIndex + 1;
+
+    // Empty list on a fresh SSH tab.
+    HttpResult r = httpRequest(m_server->port(), "GET",
+                               QStringLiteral("/api/v1/tabs/fwd-host/forward"));
+    QCOMPARE(r.status, 200);
+    QCOMPARE(QJsonDocument::fromJson(r.body).object()
+                 .value(QStringLiteral("forwards")).toArray().size(), 0);
+
+    // Validation: bad type, missing bindPort, local without target.
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/fwd-host/forward"),
+                    QJsonObject{{QStringLiteral("type"), QStringLiteral("sctp")},
+                                {QStringLiteral("bindPort"), 5000}});
+    QCOMPARE(r.status, 400);
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/fwd-host/forward"),
+                    QJsonObject{{QStringLiteral("type"), QStringLiteral("local")}});
+    QCOMPARE(r.status, 400);
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/fwd-host/forward"),
+                    QJsonObject{{QStringLiteral("type"), QStringLiteral("local")},
+                                {QStringLiteral("bindPort"), 8080}});
+    QCOMPARE(r.status, 400);
+
+    // Local forward answers with the listen address and the full list.
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/fwd-host/forward"),
+                    QJsonObject{{QStringLiteral("type"), QStringLiteral("local")},
+                                {QStringLiteral("bindPort"), 8080},
+                                {QStringLiteral("targetHost"), QStringLiteral("10.0.0.5")},
+                                {QStringLiteral("targetPort"), 80}});
+    QCOMPARE(r.status, 200);
+    QJsonObject body = QJsonDocument::fromJson(r.body).object();
+    QCOMPARE(body.value(QStringLiteral("listen")).toString(), QStringLiteral("127.0.0.1:8080"));
+    QCOMPARE(body.value(QStringLiteral("target")).toString(), QStringLiteral("root@10.1.1.1:22"));
+    QCOMPARE(body.value(QStringLiteral("forwards")).toArray().size(), 1);
+    QCOMPARE(body.value(QStringLiteral("forwards")).toArray().at(0).toObject()
+                 .value(QStringLiteral("target")).toString(),
+             QStringLiteral("10.0.0.5:80"));
+
+    // Dynamic (SOCKS) forward needs no target.
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/fwd-host/forward"),
+                    QJsonObject{{QStringLiteral("type"), QStringLiteral("dynamic")},
+                                {QStringLiteral("bindPort"), 1080}});
+    QCOMPARE(r.status, 200);
+
+    // List shows both, with stable indices.
+    r = httpRequest(m_server->port(), "GET",
+                    QStringLiteral("/api/v1/tabs/fwd-host/forward"));
+    QCOMPARE(r.status, 200);
+    QJsonArray list = QJsonDocument::fromJson(r.body).object()
+                          .value(QStringLiteral("forwards")).toArray();
+    QCOMPARE(list.size(), 2);
+    QCOMPARE(list.at(0).toObject().value(QStringLiteral("type")).toString(),
+             QStringLiteral("local"));
+    QCOMPARE(list.at(1).toObject().value(QStringLiteral("type")).toString(),
+             QStringLiteral("dynamic"));
+    QCOMPARE(list.at(1).toObject().value(QStringLiteral("target")).toString(), QString());
+
+    // Remove by index; the remaining list reindexes.
+    r = httpRequest(m_server->port(), "DELETE",
+                    QStringLiteral("/api/v1/tabs/fwd-host/forward?index=0"));
+    QCOMPARE(r.status, 200);
+    r = httpRequest(m_server->port(), "GET",
+                    QStringLiteral("/api/v1/tabs/fwd-host/forward"));
+    list = QJsonDocument::fromJson(r.body).object()
+               .value(QStringLiteral("forwards")).toArray();
+    QCOMPARE(list.size(), 1);
+    QCOMPARE(list.at(0).toObject().value(QStringLiteral("type")).toString(),
+             QStringLiteral("dynamic"));
+
+    // Out-of-range and missing index; local tab refusal.
+    r = httpRequest(m_server->port(), "DELETE",
+                    QStringLiteral("/api/v1/tabs/fwd-host/forward?index=9"));
+    QCOMPARE(r.status, 400);
+    r = httpRequest(m_server->port(), "DELETE",
+                    QStringLiteral("/api/v1/tabs/fwd-host/forward"));
+    QCOMPARE(r.status, 400);
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/fwd-local/forward"),
+                    QJsonObject{{QStringLiteral("type"), QStringLiteral("local")},
+                                {QStringLiteral("bindPort"), 8080},
+                                {QStringLiteral("targetHost"), QStringLiteral("x")},
+                                {QStringLiteral("targetPort"), 80}});
+    QCOMPARE(r.status, 400);
+
+    m_tabs.entries.removeAt(localIndex);
+    m_tabs.entries.removeAt(sshIndex);
+    m_tabs.forwards.remove(sshIndex);
+}
+
+void TestAgentHttp::policyGate()
+{
+    // Fresh policy state (session grants + persistent rules from earlier
+    // runs of this file share the test-mode Config).
+    AgentPolicy::instance().clearSessionGrants();
+    Config::instance().remove(QStringLiteral("agent/policyRules"));
+    Config::instance().sync();
+
+    // Dedicated SSH tab; identity = session:fake-policy-host (stable id).
+    m_tabs.entries.append(sshTab(QStringLiteral("policy-host"), QStringLiteral("10.2.2.2"),
+                                 QStringLiteral("policy-host")));
+    const int tab = m_tabs.entries.size() - 1;
+    const QString identity = QStringLiteral("session:fake-policy-host");
+    QCOMPARE(AgentSudoAuth::identityFor(m_tabs.sessionConfigForTab(tab)), identity);
+
+    // Default decision for uploads is Ask: the dialog is consulted.
+    const int asksBefore = m_tabs.policyAsks;
+    m_tabs.policyAnswer = FakeTabs::PolicyAnswerKind::Reject;
+    HttpResult r = httpRequest(m_server->port(), "POST",
+                               QStringLiteral("/api/v1/tabs/policy-host/upload"),
+                               QJsonObject{{QStringLiteral("localPath"), QStringLiteral("a")},
+                                           {QStringLiteral("remotePath"), QStringLiteral("b")}});
+    QCOMPARE(r.status, 403);
+    QVERIFY(QString::fromUtf8(r.body).contains(QLatin1String("user_rejected")));
+    QCOMPARE(m_tabs.policyAsks, asksBefore + 1);
+
+    // Timeout answer surfaces its own reason.
+    m_tabs.policyAnswer = FakeTabs::PolicyAnswerKind::Timeout;
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/policy-host/upload"),
+                    QJsonObject{{QStringLiteral("localPath"), QStringLiteral("a")},
+                                {QStringLiteral("remotePath"), QStringLiteral("b")}});
+    QCOMPARE(r.status, 403);
+    QVERIFY(QString::fromUtf8(r.body).contains(QLatin1String("timeout")));
+
+    // Session grant (the "This session" choice) bypasses the dialog.
+    AgentPolicy::instance().grantSession(identity, AgentPolicy::Operation::Upload);
+    const int asksGranted = m_tabs.policyAsks;
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/policy-host/upload"),
+                    QJsonObject{{QStringLiteral("localPath"), QStringLiteral("a")},
+                                {QStringLiteral("remotePath"), QStringLiteral("b")},
+                                {QStringLiteral("async"), true}});
+    QCOMPARE(r.status, 200);
+    QCOMPARE(QJsonDocument::fromJson(r.body).object()
+                 .value(QStringLiteral("started")).toBool(), true);
+    QCOMPARE(m_tabs.policyAsks, asksGranted); // no dialog needed
+    // Reap the started worker (black-hole host, cancel releases the slot).
+    httpRequest(m_server->port(), "DELETE",
+                QStringLiteral("/api/v1/tabs/policy-host/transfer"));
+
+    // "Always" persists the rule: the NEXT forward needs no dialog.
+    AgentPolicy::instance().clearSessionGrants(); // only the rule may grant now
+    m_tabs.policyAnswer = FakeTabs::PolicyAnswerKind::AllowAlways;
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/policy-host/forward"),
+                    QJsonObject{{QStringLiteral("type"), QStringLiteral("dynamic")},
+                                {QStringLiteral("bindPort"), 1080}});
+    QCOMPARE(r.status, 200);
+    QCOMPARE(AgentPolicy::instance().check(identity, AgentPolicy::Operation::Forward),
+             AgentPolicy::Decision::Allow);
+    const int asksAlways = m_tabs.policyAsks;
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/policy-host/forward"),
+                    QJsonObject{{QStringLiteral("type"), QStringLiteral("dynamic")},
+                                {QStringLiteral("bindPort"), 1081}});
+    QCOMPARE(r.status, 200);
+    QCOMPARE(m_tabs.policyAsks, asksAlways); // rule answered, no dialog
+
+    // An explicit deny rule wins without consulting the user.
+    AgentPolicy::instance().setRule(identity, AgentPolicy::Operation::Download,
+                                    AgentPolicy::Decision::Deny);
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/policy-host/download"),
+                    QJsonObject{{QStringLiteral("localPath"), QStringLiteral("a")},
+                                {QStringLiteral("remotePath"), QStringLiteral("b")}});
+    QCOMPARE(r.status, 403);
+    QVERIFY(QString::fromUtf8(r.body).contains(QLatin1String("policy_denied")));
+    QCOMPARE(m_tabs.policyAsks, asksAlways);
+
+    // Local tabs skip the gate entirely (empty identity).
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/My%20Pi/upload"),
+                    QJsonObject{{QStringLiteral("localPath"), QStringLiteral("a")},
+                                {QStringLiteral("remotePath"), QStringLiteral("b")}});
+    QCOMPARE(r.status, 400); // NOT a policy 403: the SSH validation caught it
+
+    // Cleanup: drop rules and the scratch tab.
+    Config::instance().remove(QStringLiteral("agent/policyRules"));
+    Config::instance().sync();
+    AgentPolicy::instance().clearSessionGrants();
+    m_tabs.entries.removeAt(tab);
+    m_tabs.policyAnswer = FakeTabs::PolicyAnswerKind::AllowOnce;
+}
+
+// B5-3: MCP over Streamable HTTP — initialize / tools/list / ping go through
+// the SAME tool surface as the stdio transport; notifications get 202.
+void TestAgentHttp::mcpHttpEndpoint()
+{
+    const auto post = [this](const QJsonObject &message) {
+        return httpRequest(m_server->port(), "POST", QStringLiteral("/api/v1/mcp"), message);
+    };
+
+    // Bad JSON and batch arrays are rejected.
+    HttpResult r = httpRequest(m_server->port(), "POST", QStringLiteral("/api/v1/mcp"));
+    QCOMPARE(r.status, 400);
+
+    // initialize (numeric id — the id-matching lesson): one JSON-RPC answer.
+    r = post(QJsonObject{{QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+                         {QStringLiteral("id"), 1},
+                         {QStringLiteral("method"), QStringLiteral("initialize")},
+                         {QStringLiteral("params"), QJsonObject()}});
+    QCOMPARE(r.status, 200);
+    QJsonObject body = QJsonDocument::fromJson(r.body).object();
+    QCOMPARE(body.value(QStringLiteral("id")).toInt(), 1);
+    QCOMPARE(body.value(QStringLiteral("jsonrpc")).toString(), QStringLiteral("2.0"));
+    QVERIFY(body.value(QStringLiteral("result")).toObject()
+                .value(QStringLiteral("serverInfo")).toObject()
+                .value(QStringLiteral("name")).toString()
+            == QStringLiteral("hssh"));
+
+    // tools/list exposes the same tool names as stdio.
+    r = post(QJsonObject{{QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+                         {QStringLiteral("id"), QStringLiteral("list-1")}, // string id
+                         {QStringLiteral("method"), QStringLiteral("tools/list")}});
+    QCOMPARE(r.status, 200);
+    body = QJsonDocument::fromJson(r.body).object();
+    QCOMPARE(body.value(QStringLiteral("id")).toString(), QStringLiteral("list-1"));
+    const QJsonArray tools = body.value(QStringLiteral("result")).toObject()
+                                 .value(QStringLiteral("tools")).toArray();
+    QVERIFY(tools.size() >= 10);
+    bool hasForward = false;
+    for (const QJsonValue &v : tools) {
+        if (v.toObject().value(QStringLiteral("name")).toString()
+            == QStringLiteral("ssh_forward")) {
+            hasForward = true;
+        }
+    }
+    QVERIFY(hasForward);
+
+    // Notifications carry no id: 202 with an empty body.
+    r = post(QJsonObject{{QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+                         {QStringLiteral("method"),
+                          QStringLiteral("notifications/initialized")}});
+    QCOMPARE(r.status, 202);
+
+    // ping answers with an empty result object.
+    r = post(QJsonObject{{QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+                         {QStringLiteral("id"), 7},
+                         {QStringLiteral("method"), QStringLiteral("ping")}});
+    QCOMPARE(r.status, 200);
+    body = QJsonDocument::fromJson(r.body).object();
+    QCOMPARE(body.value(QStringLiteral("id")).toInt(), 7);
+    QVERIFY(body.value(QStringLiteral("result")).isObject());
 }
 
 QTEST_GUILESS_MAIN(TestAgentHttp)

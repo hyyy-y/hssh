@@ -3,6 +3,7 @@
 
 #include "SessionConfig.h"
 #include "TransferSession.h"
+#include "KeyStore.h"
 
 #include <QString>
 #include <QThread>
@@ -35,6 +36,8 @@ public:
 
     void start() override;
     void stop() override;
+    // Host-key gate (PH2-12 semantics); set BEFORE start().
+    void setHostKeyVerifier(const KeyStore::HostKeyVerifier &verifier);
 
     void upload(const QString &localPath, const QString &remotePath, bool verify = true) override;
     void download(const QString &remotePath, const QString &localPath, bool verify = true) override;
@@ -61,6 +64,7 @@ private:
     Mode m_mode;
     QThread m_thread;
     ssh_session m_ssh = nullptr;
+    KeyStore::HostKeyVerifier m_hostKeyVerifier;
     std::atomic<bool> m_cancelTransfer{false};
 };
 
