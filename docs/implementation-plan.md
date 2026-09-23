@@ -1,4 +1,4 @@
-# HSSH 未实现功能实施计划（总纲）
+﻿# HSSH 未实现功能实施计划（总纲）
 
 > 版本：v1
 > 覆盖：docs/requirements.md 全部 [ ] 项（29 项）+ docs/feature-gap.md 对标发现的未列出功能（43 项），全部转为可执行工作项。
@@ -79,7 +79,7 @@
 - 验收：单测覆盖生成/导入/指纹/knownhosts 判定。
 - 工作量：3-4 天。
 
-### PH0-06 构建与第三方依赖调整
+### PH0-06 构建与第三方依赖调整 ✅ 完成（2026-09-22：HSSH_WITH_GSSAPI 选项联动 libssh、Qt6 WebSockets 可选探测、HSSH_HAS_SSH_BIN/HSSH_SSH_BIN 探测；SerialPort 槽位已被串口原生 API 实现替代不需要）
 - 目标：为后续特性预置依赖与开关。
 - 方案：
   1. CMakeLists：find_package Qt6 COMPONENTS 增加 SerialPort、WebSockets（可选，find 不到则 disable 对应特性宏）；Qt Charts 可选项（监控面板 PH3-16 用自绘曲线则不需要）。
@@ -105,7 +105,7 @@
 - 验收：构造 50MB 文件传一半断网重连，续传字节数与校验和正确；tests/test_sftp.cpp 增加续传用例（sftp_test_server.py 支持 seek 场景）。
 - 工作量：3-4 天。
 
-### PH1-02 出站 HTTP/SOCKS5 代理
+### PH1-02 出站 HTTP/SOCKS5 代理 ✅ 已完成（2026-09-20，编译树验证；真机带凭据链路待用户实测）
 - 目标：SSH 连接可走 HTTP CONNECT / SOCKS5 出站代理（需求 3.4 未实现项）。
 - 方案：
   1. SessionConfig 加 netProxy 字段组（type: None/Http/Socks5、host、port、user、pass 加密）；NewSessionDialog 增加代理页。
@@ -117,7 +117,7 @@
 - 验收：HTTP 代理与 SOCKS5 代理下 ssh_connect 成功；无代理时回归正常；错误信息包含代理阶段。
 - 工作量：3-4 天。
 
-### PH1-03 Jump Host / ProxyJump
+### PH1-03 Jump Host / ProxyJump ✅ 已完成（2026-09-20，编译树验证；真机带凭据链路待用户实测）
 - 目标：经跳板机连内网主机（需求 3.4 未实现项）。
 - 方案（纯 libssh 双会话 + 本地转发桥，不依赖 OpenSSH）：
   1. SessionConfig 加 jumpHost/jumpUser/jumpPort/jumpAuthMethod/jumpPassword(加密)/jumpPrivateKey；NewSessionDialog 增加跳板页。
@@ -129,7 +129,7 @@
 - 验收：经跳板机连接内网主机成功；跳板密码/密钥两种认证可用；失败提示定位到跳板段。
 - 工作量：4-5 天。
 
-### PH1-04 终端鼠标协议
+### PH1-04 终端鼠标协议 ✅ 已完成（2026-09-20，编译树验证 ctest 10/10）
 - 目标：vim/tmux/htop 等支持鼠标的应用可点击、拖选、滚动（需求 3.2 未实现项）。
 - 方案（libvterm）：
   1. TerminalWidget 跟踪鼠标模式：解析 \x1b[?1000;1002;1003;1006h/l 序列（或 libvterm 内部 mouse mode API），维护枚举 None/Click/Drag/Move + SGR 标志。
@@ -141,7 +141,7 @@
 - 验收：vim 内鼠标点击移动光标、拖选可视块、滚轮翻页；普通 shell 下选择复制不受影响。
 - 工作量：3-4 天。
 
-### PH1-05 自定义字体 / 颜色主题 / 背景透明度
+### PH1-05 自定义字体 / 颜色主题 / 背景透明度 ✅ 已完成（2026-09-20，编译树验证 ctest 10/10）
 - 目标：需求 3.2 未实现项。
 - 方案：
   1. 字体：TerminalWidget 的 QFont 改为从 Config 读 terminal/fontFamily + terminal/fontSize（默认保留现状）；字体变更信号重算 m_cellWidth/m_cellHeight。
@@ -153,7 +153,7 @@
 - 验收：改字体/主题/透明度即时生效；深色/浅色两套主题无白底黑字错乱。
 - 工作量：3-4 天。
 
-### PH1-06 快速连接栏
+### PH1-06 快速连接栏 ✅ 已完成（2026-09-20，编译树验证 ctest 10/10；含会话 Duplicate 与测试实例基建 --port/--no-restore/HSSH_DEBUG_LOG）
 - 目标：不建会话直连（对标 gap#31）。
 - 方案：MainWindow 工具栏加 QLineEdit（占位 "user@host:port"），回车解析 → 临时 SessionConfig（不落库）→ 走 SessionTab 创建连接；支持 history（QComboBox editable + completer，存 Config session/quickConnectHistory）。
 - 涉及：MainWindow.cpp、SessionTab。
@@ -161,7 +161,7 @@
 - 验收：输入 root@10.0.0.1:2222 回车即连；历史可回选。
 - 工作量：1 天。
 
-### PH1-07 OpenSSH .ssh/config 导入
+### PH1-07 OpenSSH .ssh/config 导入 ✅ 已完成（2026-09-20，编译树验证 ctest 10/10；含会话 Duplicate 与测试实例基建 --port/--no-restore/HSSH_DEBUG_LOG）
 - 目标：复用运维存量 ssh 配置（对标 gap#7，需求未列出）。
 - 方案：
   1. 新 src/core/SshConfigParser.{h,cpp}：解析 ~/.ssh/config 与用户指定文件；支持 Host/HostName/User/Port/IdentityFile/IdentitiesOnly/ProxyJump/ProxyCommand/ServerAliveInterval/Compression/LocalForward/RemoteForward 等指令；Host 通配（* ?）与段继承（Include 展开）。
@@ -172,7 +172,7 @@
 - 验收：典型 ssh config（含通配与 LocalForward）导入后连接可用；tests/test_sshconfig.cpp 单测覆盖解析。
 - 工作量：3-4 天。
 
-### PH1-08 标签页增强：分离/固定/着色/序号切换
+### PH1-08 标签页增强：分离/固定/着色/序号切换 ✅ 完成（2026-09-20 分组/固定/克隆/Ctrl+数字；2026-09-21 拖出浮窗 FloatingTabWindow + Dock 回归 + 右键 Detach 菜单）
 - 目标：对标 gap#10、11、33。
 - 方案：
   1. MainWindow 换用自定义 TabBar（QTabBar 子类 SessionTabBar）：拖出（mouseMove 到屏幕边缘→新 QMainWindow 浮窗承载该 SessionTab，支持拖回）、固定（右键 Pin，置顶且不可关闭）、着色（连接状态/告警变色）、Ctrl+1..9 切换。
@@ -183,7 +183,7 @@
 - 验收：拖出/拖回无闪退；固定标签不参与滚动关闭；Ctrl+数字跳转。
 - 工作量：3-4 天。
 
-### PH1-09 SSH 密钥管理器（含 ppk 导入）
+### PH1-09 SSH 密钥管理器（含 ppk 导入） ◐ 核心完成（2026-09-21：KeyManagerDialog + KeyStore 高层 API + 会话引用 + test_keystore 8 用例；生成仅 Ed25519——libssh mbedTLS 后端 pki_private_key_to_pem 是返回 NULL 的桩，RSA/ECDSA 私钥导出不可用；ppk 导入拆到 B7）
 - 现状：主菜单 Key Manager 空壳；需求 3.6 未实现项。
 - 方案：
   1. 新 src/app/dialogs/KeyManagerDialog：列表（名称/类型/指纹/路径）、生成（ED25519/RSA-2048/4096/ECDSA-256/384，可设 passphrase）、导入（OpenSSH/PEM/ppk）、导出公钥（复制 authorized_keys 行）、删除；私钥存 KeyStore（PH0-05），主密码加密。
@@ -194,7 +194,7 @@
 - 验收：生成→复制公钥→远端登录成功；ppk v2/v3 导入后可直接认证；主密码锁定时不可导出私钥。
 - 工作量：5-7 天。
 
-### PH1-10 SSH Agent 转发（ForwardAgent）
+### PH1-10 SSH Agent 转发（ForwardAgent） ✅ 已完成（2026-09-20，编译树验证；真机带凭据链路待用户实测）
 - 现状：需求 3.1 未实现项；libssh 无 auth-agent channel API。
 - 方案（两档）：
   1. v1（务实）：检测会话开启 ForwardAgent 时，回退用系统 OpenSSH 子进程承载该连接（ssh -A -t user@host），终端桥接子进程 IO —— 功能可用但绕开 libssh，仅该会话生效；标注依赖本机 ssh.exe（Windows 10+ / macOS / Linux 自带）。
@@ -208,7 +208,7 @@
 
 ## 3. Phase 2 —— P1 追平主流
 
-### PH2-01 宽度变化重排（reflow）
+### PH2-01 宽度变化重排（reflow） ✅ 完成（2026-09-21：ScrollbackEntry.wrapped 启发式 + 列宽感知重切 + 150ms 防抖；选择丢弃、搜索重跑；宽字形不劈半。测试锁定往返一致性）
 - 现状：需求 3.2 未实现项；libvterm 无 reflow API；resize 只改行列。
 - 方案（懒重排，保留 live screen）：
   1. ScrollbackLine 增加 wrap 标记（行由哪个逻辑行 wrap 而来）；resize 时仅对 scrollback 部分按新列宽重新软换行（合并 wrap 行→重切），live screen 交由 libvterm 自身 resize（保留屏幕，溢出由 screenSbPushLine 接管）。
@@ -219,7 +219,7 @@
 - 验收：拖宽/拖窄窗口后历史行按新宽度正确换行；屏幕内容与光标不丢；选择/搜索定位不偏移。
 - 工作量：5-8 天（本阶段风险最高项）。
 
-### PH2-02 时间戳 / 输出折叠 / 大纲视图
+### PH2-02 时间戳 / 输出折叠 / 大纲视图 ◐ ①时间戳+③大纲完成（2026-09-21：11 列 gutter + arriveMs/damage 时间戳 + TerminalOutlineWidget dock）；②折叠单独排期（选择/滚动坐标耦合，风险高）
 - 现状：需求 3.2 未实现项。
 - 方案：
   1. 时间戳：ScrollbackLine 加 arriveMs 字段；terminal/showTimestamps 开关 → 行首渲染 HH:MM:SS（渲染时前缀，不改 bufferText 输出）。
@@ -230,7 +230,7 @@
 - 验收：时间戳可开关；折叠/展开正确且滚动不乱；大纲点击定位准确。
 - 工作量：5-7 天。
 
-### PH2-03 链接可点击（URL / 路径）
+### PH2-03 链接可点击（URL / 路径） ✅ 完成（2026-09-21：linkAt + Ctrl+Click + hover 手型 + 右键菜单；路径类 token 不误报）
 - 目标：对标 gap#12。
 - 方案：TerminalWidget hover 时 cellAtPosition → lineTextRange 提取当前 token，正则匹配 http(s)://、file://、邮箱、/绝对路径、./相对路径；Ctrl+Click 触发（URL 用 QDesktopServices::openUrl；本地/远端路径：本地 QDesktopServices 打开，远端提示下载）；右键菜单加"打开链接"。hover 命中时切换手型光标。
 - 涉及：TerminalWidget.{h,cpp}（eventFilter/hover 追踪）、MainWindow（信号处理）。
@@ -238,7 +238,7 @@
 - 验收：终端中 URL 可 Ctrl+点击打开；路径高亮提示。
 - 工作量：2-3 天。
 
-### PH2-04 OSC 52 剪贴板同步
+### PH2-04 OSC 52 剪贴板同步 ✅ 完成（2026-09-21：嗅探状态机 + decodeOsc52 纯函数 + deny/prompt/allow 三态；本地→远端查询方向有意不响应）
 - 目标：对标 gap#13。
 - 方案：TerminalWidget::feedData 解析 OSC 52 序列（\x1b]52;[c];base64(\x07|ESC\），按 terminal/osc52Mode（禁止/允许读/允许读写，默认允许读）决定是否写剪贴板；同时支持"本地复制 → 发 OSC 52 给远端"（配合 tmux set-clipboard）。
 - 涉及：TerminalWidget.{h,cpp}、Config。
@@ -265,7 +265,7 @@
 - 验收：按钮点击在目标终端执行命令；confirm 项弹确认；变量替换正确。
 - 工作量：2-3 天。
 
-### PH2-07 命令面板（Command Palette）
+### PH2-07 命令面板（Command Palette） ✅ 完成（2026-09-21：CommandPalette + Ctrl+Shift+P + 菜单/会话/标签三数据源 + 最近使用持久化加权）
 - 目标：需求 3.5 未实现项。
 - 方案：新 CommandPalette（QDialog 无边框 + QLineEdit + QListView，fuzzy 过滤）：注册项=所有 QAction + 快速命令 + 会话列表（跳转/连接）+ 命令发送器项；Ctrl+Shift+P 唤起；支持最近使用排序。
 - 涉及：src/app/widgets/CommandPalette.{h,cpp}、MainWindow.cpp。
@@ -273,7 +273,7 @@
 - 验收：模糊搜索直达操作；回车执行、Esc 关闭。
 - 工作量：2-3 天。
 
-### PH2-08 同步输入 + 自由输入模式
+### PH2-08 同步输入 + 自由输入模式 ✅ 完成（2026-09-20 同步输入；2026-09-21 自由输入模式：工具栏 Free Type 切换 + 全 SSH 标签镜像 + 确认/状态提示）
 - 目标：需求 3.5 两项未实现项。
 - 方案：
   1. 同步输入（Sync Input）：会话右键/工具栏勾选多个 tab → 输入广播到选中组（InputBroadcaster 目标过滤）；组内每个终端各自回显，输入原样注入（警告：vim/密码场景不同步）。
@@ -291,7 +291,7 @@
 - 验收：scp 上传/下载/目录与 openssh scp 互通；进度正确。
 - 工作量：3-4 天。
 
-### PH2-10 ZMODEM / YMODEM / XMODEM（rz/sz）
+### PH2-10 ZMODEM / YMODEM / XMODEM（rz/sz） ✅ 接收方向完成（字节级验收全过）；◐ 发送方向（ZFILE/ZRPOS/ZDATA 链路已通，数据子包落盘细节待校准——ZNAK 根因已定位 ZCRCW→ZCRCX 已修，最后一步 rz 未写文件待查）
 - 目标：需求 3.3 未实现项。
 - 方案：
   1. 新 src/core/zmodem/ 目录：ZmodemSession 状态机（ZRQINIT/ZRINIT/ZFILE/ZDATA/ZCRC/ZFIN/子包编码/CRC32/超时重传/窗口），YMODEM 用同框架精简。
@@ -313,7 +313,7 @@
 - 验收：域环境下 Kerberos 免密登录成功；无 GSSAPI 环境构建不受影响。
 - 工作量：2-3 天 + 环境验证。
 
-### PH2-12 known_hosts 指纹管理
+### PH2-12 known_hosts 指纹管理 ✅ 完成（2026-09-21：连接前拦截 + TOFU/ask/accept-all 三态 + 变更强告警与旧条目清除 + Key Manager 管理面板；管理入口放 Key Manager 而非设置页）
 - 目标：对标 gap#36（需求未明确列出）。
 - 方案：基于 KeyStore（PH0-05）：首次连接弹"主机指纹确认"（显示 SHA256/MD5 指纹，保存到 ~/.hssh/known_hosts，libssh ssh_write_knownhost）；主机变更（ssh_is_server_known 返回 SSH_SERVER_KNOWN_CHANGED）弹强告警并可移除旧条目；设置页可查看/删除条目。现有 sshConnectAndAuthenticate 加回调参数返回 knownhost 状态。
 - 涉及：KeyStore.{h,cpp}、SshConnect.cpp、NewSessionDialog（指纹页）、SettingsDialog（known_hosts 管理）。
@@ -321,7 +321,7 @@
 - 验收：首次连接确认指纹；改主机密钥后提示变更；删除条目后可重新确认。
 - 工作量：2-3 天。
 
-### PH2-13 2FA / 键盘交互扩展
+### PH2-13 2FA / 键盘交互扩展 ✅ 完成（2026-09-21：kbdint 多轮循环 + 密码轮自动应答 + KbdintPromptDialog 逐项输入/会话级记忆 + headless 明确报错；真机 2FA 服务器验证待做）
 - 现状：KeyboardInteractive 走密码通道（需求标注"当前走密码通道"）。
 - 目标：支持服务器逐项提示（密码/TOTP/验证码）。
 - 方案：SshConnect 增加 kbdint 回调：ssh_userauth_kbdint 循环中把 prompts 收集为列表 → 通过 QMetaObject 跨线程发 GUI 弹窗（KbdintPromptDialog：逐项输入，密码项掩码）→ 回填 answers；SessionConfig 加"记住本会话 2FA"（临时内存缓存，不落盘）。
@@ -365,7 +365,7 @@
 - 验收：连 Cisco/网络设备正常交互；Ctrl+] 退出提示（可选）；NAWS 生效。
 - 工作量：3-4 天。
 
-### PH3-02 串口 Serial（COM/tty）
+### PH3-02 串口 Serial（COM/tty） ✅ 已完成（2026-09-20，编译树验证）
 - 目标：对标 gap#2，贴合嵌入式调试场景（AGENTS.md RK3588 串口）。
 - 方案：SerialTransport 实现 ITransport：QSerialPort（Qt6 SerialPort 模块）；SessionConfig 加 serialPort/baudRate/databits/parity/stopbits/flowcontrol + 换行转换；SessionType::Serial；NewSessionDialog 串口配置页（可枚举本机端口 QSerialPortInfo）。
 - 涉及：src/core/transport/SerialTransport.{h,cpp}（新）、SessionConfig、NewSessionDialog、CMakeLists（HSSH_HAS_SERIAL）。

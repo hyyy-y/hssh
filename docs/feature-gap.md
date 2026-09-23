@@ -57,7 +57,7 @@
 
 | 功能 | 说明 / 核验证据 |
 |------|----------------|
-| SSH 密钥管理器 | 主菜单 **"Key Manager" 是空壳**（`MainWindow.cpp:154` addAction 无 handler）；无密钥生成/导入/导出/格式转换 |
+| SSH 密钥管理器 | ✅ PH1-09（2026-09-21）：Tools→Key Manager 落地（列表/生成 Ed25519/导入 OpenSSH-PEM/导出 authorized_keys 公钥/删除）；会话对话框"Key Store..."直接引用。余项：ppk 格式转换（排期 B7）；RSA/ECDSA 生成受 libssh mbedTLS 后端限制（pki_private_key_to_pem 为桩） |
 | FIDO2 / YubiKey | 0 命中 |
 
 ### 1.7 Agent 功能
@@ -100,10 +100,10 @@
 | # | 功能 | 代表工具 | 说明 |
 |---|------|----------|------|
 | 9 | **快捷命令栏 / Quickbar（可定制按钮一键执行）** | WindTerm/Xshell/FinalShell | 高频操作按钮化，比命令发送器更细粒度 |
-| 10 | **标签页拖出为独立窗口 / 多窗口** | Xshell/WindTerm/MobaXterm/Tabby | 多显示器场景 |
-| 11 | **标签页固定 / 着色 / 图标 / 重命名** | Xshell/Tabby/Termius | 会话状态可视化（如报错变红） |
-| 12 | **链接可点击（URL / 路径 Ctrl+Click）** | Tabby/Termius/WindTerm | 终端里点网址/文件路径 |
-| 13 | **OSC 52 剪贴板同步** | Tabby/iTerm2/Termius | 远端复制内容直接进本机剪贴板 |
+| 10 | ✅ PH1-08（2026-09-21）：**标签页拖出为独立窗口**——拖离标签栏±12px 弹 FloatingTabWindow，"Dock to Main Window" 归位；右键 Detach 菜单 |
+| 11 | ✅ PH1-08（2026-09-20）：**标签页固定 / 着色 / 重命名** + 克隆 / Close Others / Ctrl+1..9 |
+| 12 | ✅ PH2-03（2026-09-21）：**链接可点击（URL Ctrl+Click）**——hover 手型/tooltip、右键 Open/Copy；路径 token 不误报 |
+| 13 | ✅ PH2-04（2026-09-21）：**OSC 52 剪贴板同步**——BEL/ST 终结符嗅探 + deny/prompt/allow 三态 + 1MB 上限；查询帧不响应 |
 | 14 | **关键字告警（输出匹配错误/关键字变色、弹窗、声音）** | Xshell/FinalShell | 日志监控刚需：跑任务盯报错 |
 | 15 | **命令完成通知（响铃/系统通知）** | Termius/Tabby | 长任务完成提醒 |
 | 16 | 字体连字（Ligatures） | Tabby | 现代终端卖点 |
@@ -141,7 +141,7 @@
 
 | # | 功能 | 代表工具 | 说明 |
 |---|------|----------|------|
-| 36 | **known_hosts / 主机密钥指纹可视化与管理 UI** | 多数工具 | 首次连接指纹展示、变更告警 |
+| 36 | ✅ PH2-12（2026-09-21）：**known_hosts 指纹校验与管理**——连接前拦截（TOFU 默认/ask 弹窗/accept-all），变更密钥强告警+旧条目清除，Key Manager 内置 Known Hosts 面板 |
 | 37 | 连接 2FA（服务器支持时） | Termius | |
 | 38 | 密码管理器集成（1Password/KeePass） | Termius/SecureCRT | |
 | 39 | **密钥格式转换**（OpenSSH ↔ PuTTY ppk 导入） | Xftp/WinSCP/PuTTY | 老用户迁移刚需 |

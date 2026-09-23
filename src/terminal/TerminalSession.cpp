@@ -1,5 +1,6 @@
 #include "TerminalSession.h"
 
+#include "ZModemEngine.h"
 #include "TerminalWidget.h"
 #include "terminal/SshShellProcess.h"
 #include "utils/Config.h"
@@ -36,9 +37,20 @@ TerminalSession::TerminalSession(ShellProcess *process, QWidget *parent)
     m_terminal = new TerminalWidget(this);
     layout->addWidget(m_terminal);
 
+    // PH2-10: ZMODEM watcher (engine emits protocol bytes via output()).
+    m_zmodem = new ZModemEngine(this);
+    connect(m_zmodem, &ZModemEngine::output, this, [this](const QByteArray &data) {
+        if (!data.isEmpty() && m_process) {
+            m_process->write(data);
+        }
+    });
+    connect(m_zmodem, &ZModemEngine::status, this, [this](const QString &line) {
+        m_terminal->feedData(("\r\n" + line + "\r\n").toUtf8());
+    });
+
     if (m_process) {
         m_process->setParent(this);
-        connect(m_terminal, &TerminalWidget::dataToSend, this, &TerminalSession::onInputReceived);
+        connect(m_terminal, &TerminalWidget::dataToSend, this, &TerminalSession::onKeyboardInput);
         connect(m_process, &ShellProcess::dataReceived, this, &TerminalSession::onDataReceived);
         connect(m_process, &ShellProcess::finished, this, &TerminalSession::onProcessFinished);
         connect(m_process, &ShellProcess::errorOccurred, this, &TerminalSession::onProcessError);
@@ -106,6 +118,21 @@ void TerminalSession::sendInput(const QByteArray &data)
     onInputReceived(data);
 }
 
+// Keyboard path: same delivery as the API path, plus a signal for sync-input
+// routing. Mirrored input re-enters the targets through sendInput (API), so
+// the mirror never re-emits keyboardInput — no feedback loop.
+void TerminalSession::onKeyboardInput(const QByteArray &data)
+{
+    emit keyboardInput(data);
+    // Ctrl+C during an active ZMODEM transfer cancels the transfer (the
+    // engine sends the CAN sequence); the keystroke itself is swallowed.
+    if (m_zmodem && m_zmodem->isActive() && data.contains('\x03')) {
+        m_zmodem->abort();
+        return;
+    }
+    onInputReceived(data);
+}
+
 void TerminalSession::onInputReceived(const QByteArray &data)
 {
     if (m_linkDead) {
@@ -122,6 +149,19 @@ void TerminalSession::onInputReceived(const QByteArray &data)
 
 void TerminalSession::onDataReceived(const QByteArray &data)
 {
+    // PH2-10: the ZMODEM engine watches the stream; protocol bytes never
+    // reach the terminal, everything else displays as before.
+    if (m_zmodem) {
+        const QByteArray display = m_zmodem->feed(data);
+        if (!display.isEmpty()) {
+            if (m_logFile.isOpen()) {
+                m_logFile.write(display);
+                m_logFile.flush();
+            }
+            m_terminal->feedData(display);
+        }
+        return;
+    }
     if (m_logFile.isOpen()) {
         m_logFile.write(data);
         m_logFile.flush();
@@ -155,6 +195,18 @@ void TerminalSession::onLinkDown(bool autoReconnect)
     m_linkDead = true;
     m_terminal->feedData(disconnectBanner(autoReconnect));
     emit linkDown(autoReconnect);
+}
+
+void TerminalSession::setTerminalFont(const QFont &font)
+{
+    if (m_terminal) {
+        m_terminal->setTerminalFont(font);
+    }
+}
+
+bool TerminalSession::zmodemSendFile(const QString &localPath)
+{
+    return m_zmodem && m_zmodem->startSend(localPath);
 }
 
 void TerminalSession::reconnect()

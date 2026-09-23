@@ -3,6 +3,13 @@
 
 #include "core/SessionConfig.h"
 
+#ifdef HSSH_HAS_LIBSSH
+#include "core/KeyStore.h"
+#endif
+
+#include <QFont>
+#include <QHash>
+#include <QStringList>
 #include <QWidget>
 
 namespace hssh {
@@ -26,9 +33,16 @@ public:
     // Plain-text dump of the terminal buffer (last maxLines rows).
     [[nodiscard]] QString readTerminalText(int maxLines) const;
     [[nodiscard]] QString readTerminalTextRange(int fromLine, int maxLines) const;
+    // PH1-05: runtime terminal font change.
+    void setTerminalFont(const QFont &font);
+
+    // PH2-10: ZMODEM send (local -> remote rz).
+    bool zmodemSendFile(const QString &localPath);
 
 signals:
     void sizeChanged(int columns, int rows);
+    // Raw keyboard input typed into this tab's terminal (sync-input source).
+    void inputTyped(const QByteArray &data);
 
 public slots:
     void connectSession();
@@ -40,9 +54,20 @@ public slots:
 
 private:
     void setupUi();
+    // PH2-12: interactive host-key confirmation (GUI thread only).
+#ifdef HSSH_HAS_LIBSSH
+    KeyStore::HostKeyDecision promptHostKey(const KeyStore::HostKeyInfo &info, bool changed);
+#endif
+    // PH2-13: remembered 2FA answers for this tab's lifetime (never stored
+    // on disk). Keyed by server name + prompt texts.
+    QHash<QString, QStringList> m_kbdintCache;
 
     SessionConfig m_config;
     TerminalSession *m_terminalSession = nullptr;
+
+public:
+    // PH2-02: outline dock access (may be null during teardown).
+    [[nodiscard]] TerminalSession *terminalSession() const { return m_terminalSession; }
 };
 
 } // namespace hssh

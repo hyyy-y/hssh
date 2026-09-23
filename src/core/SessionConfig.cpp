@@ -177,6 +177,136 @@ void SessionConfig::setAutoReconnect(bool enabled)
     m_autoReconnect = enabled;
 }
 
+bool SessionConfig::forwardAgent() const
+{
+    return m_forwardAgent;
+}
+
+void SessionConfig::setForwardAgent(bool enabled)
+{
+    m_forwardAgent = enabled;
+}
+
+QStringList SessionConfig::tags() const
+{
+    return m_tags;
+}
+
+void SessionConfig::setTags(const QStringList &tags)
+{
+    m_tags = tags;
+}
+
+bool SessionConfig::favorite() const
+{
+    return m_favorite;
+}
+
+void SessionConfig::setFavorite(bool favorite)
+{
+    m_favorite = favorite;
+}
+
+QString SessionConfig::proxyType() const
+{
+    return m_proxyType;
+}
+
+void SessionConfig::setProxyType(const QString &type)
+{
+    m_proxyType = (type == QLatin1String("none")) ? QString() : type;
+}
+
+QString SessionConfig::proxyHost() const
+{
+    return m_proxyHost;
+}
+
+void SessionConfig::setProxyHost(const QString &host)
+{
+    m_proxyHost = host;
+}
+
+int SessionConfig::proxyPort() const
+{
+    return m_proxyPort;
+}
+
+void SessionConfig::setProxyPort(int port)
+{
+    m_proxyPort = port;
+}
+
+QString SessionConfig::proxyUsername() const
+{
+    return m_proxyUsername;
+}
+
+void SessionConfig::setProxyUsername(const QString &username)
+{
+    m_proxyUsername = username;
+}
+
+SecureString SessionConfig::proxyPassword() const
+{
+    return m_proxyPassword;
+}
+
+void SessionConfig::setProxyPassword(const SecureString &password)
+{
+    m_proxyPassword = password;
+}
+
+QString SessionConfig::jumpHost() const
+{
+    return m_jumpHost;
+}
+
+void SessionConfig::setJumpHost(const QString &host)
+{
+    m_jumpHost = host;
+}
+
+int SessionConfig::jumpPort() const
+{
+    return m_jumpPort;
+}
+
+void SessionConfig::setJumpPort(int port)
+{
+    m_jumpPort = port;
+}
+
+QString SessionConfig::jumpUsername() const
+{
+    return m_jumpUsername;
+}
+
+void SessionConfig::setJumpUsername(const QString &username)
+{
+    m_jumpUsername = username;
+}
+
+SecureString SessionConfig::jumpPassword() const
+{
+    return m_jumpPassword;
+}
+
+void SessionConfig::setJumpPassword(const SecureString &password)
+{
+    m_jumpPassword = password;
+}
+
+QString SessionConfig::jumpPrivateKeyPath() const
+{
+    return m_jumpPrivateKeyPath;
+}
+
+void SessionConfig::setJumpPrivateKeyPath(const QString &path)
+{
+    m_jumpPrivateKeyPath = path;
+}
+
 bool SessionConfig::isValid() const
 {
     if (m_sessionType == SessionType::Local) {
@@ -239,6 +369,25 @@ QVariantMap SessionConfig::toMap() const
     map[QStringLiteral("serialBaudRate")] = m_serialBaudRate;
     map[QStringLiteral("keepAliveSeconds")] = m_keepAliveSeconds;
     map[QStringLiteral("autoReconnect")] = m_autoReconnect;
+    map[QStringLiteral("forwardAgent")] = m_forwardAgent;
+    map[QStringLiteral("proxyType")] = m_proxyType;
+    map[QStringLiteral("proxyHost")] = m_proxyHost;
+    map[QStringLiteral("proxyPort")] = m_proxyPort;
+    map[QStringLiteral("proxyUsername")] = m_proxyUsername;
+    if (!m_proxyPassword.isEmpty()) {
+        map[QStringLiteral("proxyPassword")] =
+            QString::fromUtf8(m_proxyPassword.toByteArray().toBase64());
+    }
+    map[QStringLiteral("jumpHost")] = m_jumpHost;
+    map[QStringLiteral("jumpPort")] = m_jumpPort;
+    map[QStringLiteral("jumpUsername")] = m_jumpUsername;
+    if (!m_jumpPassword.isEmpty()) {
+        map[QStringLiteral("jumpPassword")] =
+            QString::fromUtf8(m_jumpPassword.toByteArray().toBase64());
+    }
+    map[QStringLiteral("jumpPrivateKeyPath")] = m_jumpPrivateKeyPath;
+    map[QStringLiteral("tags")] = m_tags;
+    map[QStringLiteral("favorite")] = m_favorite;
     return map;
 }
 
@@ -267,6 +416,27 @@ SessionConfig SessionConfig::fromMap(const QVariantMap &map)
     config.setSerialBaudRate(map.value(QStringLiteral("serialBaudRate"), 115200).toInt());
     config.setKeepAliveSeconds(map.value(QStringLiteral("keepAliveSeconds"), 30).toInt());
     config.setAutoReconnect(map.value(QStringLiteral("autoReconnect")).toBool());
+    config.setForwardAgent(map.value(QStringLiteral("forwardAgent")).toBool());
+    config.setProxyType(map.value(QStringLiteral("proxyType")).toString());
+    config.setProxyHost(map.value(QStringLiteral("proxyHost")).toString());
+    config.setProxyPort(map.value(QStringLiteral("proxyPort"), 0).toInt());
+    config.setProxyUsername(map.value(QStringLiteral("proxyUsername")).toString());
+    const QByteArray proxyPass = QByteArray::fromBase64(
+        map.value(QStringLiteral("proxyPassword")).toByteArray());
+    if (!proxyPass.isEmpty()) {
+        config.setProxyPassword(SecureString(QString::fromUtf8(proxyPass)));
+    }
+    config.setJumpHost(map.value(QStringLiteral("jumpHost")).toString());
+    config.setJumpPort(map.value(QStringLiteral("jumpPort"), 22).toInt());
+    config.setJumpUsername(map.value(QStringLiteral("jumpUsername")).toString());
+    const QByteArray jumpPass = QByteArray::fromBase64(
+        map.value(QStringLiteral("jumpPassword")).toByteArray());
+    if (!jumpPass.isEmpty()) {
+        config.setJumpPassword(SecureString(QString::fromUtf8(jumpPass)));
+    }
+    config.setJumpPrivateKeyPath(map.value(QStringLiteral("jumpPrivateKeyPath")).toString());
+    config.setTags(map.value(QStringLiteral("tags")).toStringList());
+    config.setFavorite(map.value(QStringLiteral("favorite"), false).toBool());
     return config;
 }
 

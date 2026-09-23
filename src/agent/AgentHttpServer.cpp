@@ -1,4 +1,4 @@
-#include "AgentHttpServer.h"
+﻿#include "AgentHttpServer.h"
 
 #include "agent/AgentAudit.h"
 #include "core/ChannelCopySession.h"
@@ -210,6 +210,16 @@ public:
         bool verify = true;
         QStringList remainingMethods; // auto-fallback chain
         qint64 bytesDone = 0;
+        qint64 bytesTotal = 0;
+        QString currentMethod;         // for the status endpoint
+        QString action;                // audit action ("tab_upload"/"tab_download")
+        QString auditDetail;           // audit detail (async transfers have no PendingOp)
+        bool async = false;            // started with no waiting HTTP client
+        // Cancel was requested: the slot is logically free (status reports
+        // inactive, new transfers allowed) while the worker winds down in
+        // the background and its finish signal cleans the record up.
+        bool cancelled = false;
+        qint64 startedMs = 0;
     };
 
     // A visible exec running in a GUI tab: the command was typed into the
@@ -301,6 +311,15 @@ void AgentHttpServer::stop()
     }
     d->tabExecs.clear();
     d->tabExecBusy.clear();
+    // Stop parentless transfer workers (they own threads + connections).
+    for (auto it = d->tabTransfers.begin(); it != d->tabTransfers.end(); ++it) {
+        if (it.value().worker) {
+            it.value().worker->cancelTransfer();
+            it.value().worker->stop();
+            it.value().worker->deleteLater();
+        }
+    }
+    d->tabTransfers.clear();
     d->server->close();
     d->server->deleteLater();
     d->server = nullptr;
@@ -832,12 +851,22 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
                 respondError(socket, 400, "Tab is not an SSH session: " + indexText);
                 return;
             }
-            for (auto it = d->tabTransfers.cbegin(); it != d->tabTransfers.cend(); ++it) {
-                if (it.value().tabIndex == index) {
-                    respondError(socket, 409, "Another transfer is running on this tab");
-                    return;
-                }
+        // A cancelled transfer keeps its record until the worker's finish
+        // signal arrives (resource cleanup stays signal-driven); it must
+        // NOT hold the tab's transfer slot (2026-09-20: cancel took up to
+        // tens of seconds to release the 409 lock while the worker was
+        // still in its connect/stat phase).
+        bool slotBusy = false;
+        for (auto it = d->tabTransfers.cbegin(); it != d->tabTransfers.cend(); ++it) {
+            if (it.value().tabIndex == index && !it.value().cancelled) {
+                slotBusy = true;
+                break;
             }
+        }
+        if (slotBusy) {
+            respondError(socket, 409, "Another transfer is running on this tab");
+            return;
+        }
 
             QStringList chain;
             if (transferMethod == QLatin1String("auto")) {
@@ -845,6 +874,11 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
             } else {
                 chain = {transferMethod};
             }
+            // async:true returns immediately after starting the transfer;
+            // progress/completion is then tracked via GET /tabs/<ref>/transfer
+            // and aborted via DELETE /tabs/<ref>/transfer. Long transfers that
+            // would outlive an MCP client's tool timeout should use this.
+            const bool asyncStart = body.value(QStringLiteral("async")).toBool(false);
 
             const QString requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
             Impl::PendingOp op;
@@ -857,7 +891,9 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
                 : QStringLiteral("tab=%1 method=%2 remote=%3 local=%4")
                       .arg(index).arg(chain.first()).arg(remotePath, localPath);
             op.startedMs = QDateTime::currentMSecsSinceEpoch();
-            d->pendingOps[requestId] = op;
+            if (!asyncStart) {
+                d->pendingOps[requestId] = op;
+            }
 
             Impl::TabTransfer transfer;
             transfer.tabIndex = index;
@@ -867,11 +903,95 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
             transfer.remotePath = remotePath;
             transfer.verify = body.value(QStringLiteral("verify")).toBool(true);
             transfer.remainingMethods = chain.mid(1);
+            transfer.currentMethod = chain.first();
+            transfer.action = op.action;
+            transfer.auditDetail = op.detail;
+            transfer.async = asyncStart;
+            transfer.startedMs = op.startedMs;
             d->tabTransfers[requestId] = transfer;
             startTabTransferWorker(requestId, chain.first());
+
+            if (asyncStart) {
+                AgentAudit::log(AgentAudit::Source::Rest, op.action, op.detail,
+                                QStringLiteral("started (async)"));
+                QJsonObject result;
+                result[QStringLiteral("ok")] = true;
+                result[QStringLiteral("started")] = true;
+                result[QStringLiteral("async")] = true;
+                result[QStringLiteral("method")] = chain.first();
+                result[QStringLiteral("direction")] = isUpload ? QStringLiteral("upload")
+                                                                : QStringLiteral("download");
+                result[QStringLiteral("target")] = tabTarget(index);
+                result[QStringLiteral("statusPath")] =
+                    QStringLiteral("/api/v1/tabs/%1/transfer").arg(indexText);
+                respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+            }
             return;
         }
 
+        // Transfer status: progress of the (single) transfer on this tab.
+        if (method == "GET" && sub == QStringLiteral("transfer")) {
+            QJsonObject result;
+            result[QStringLiteral("active")] = false;
+            for (auto it = d->tabTransfers.cbegin(); it != d->tabTransfers.cend(); ++it) {
+                if (it.value().tabIndex != index) {
+                    continue;
+                }
+                const Impl::TabTransfer &t = it.value();
+                // A cancelled transfer is logically over even while the
+                // worker winds down in the background.
+                if (t.cancelled) {
+                    result[QStringLiteral("cancelled")] = true;
+                    break;
+                }
+                result[QStringLiteral("active")] = true;
+                result[QStringLiteral("direction")] = t.isUpload
+                    ? QStringLiteral("upload") : QStringLiteral("download");
+                result[QStringLiteral("method")] = t.currentMethod;
+                result[QStringLiteral("localPath")] = t.localPath;
+                result[QStringLiteral("remotePath")] = t.remotePath;
+                result[QStringLiteral("bytesDone")] = t.bytesDone;
+                result[QStringLiteral("bytesTotal")] = t.bytesTotal;
+                result[QStringLiteral("startedMs")] = t.startedMs;
+                result[QStringLiteral("elapsedMs")] =
+                    QDateTime::currentMSecsSinceEpoch() - t.startedMs;
+                break;
+            }
+            respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+            return;
+        }
+
+        // Transfer cancel: stops the transfer on this tab. The local .part
+        // file is KEPT so an sftp retry can resume from it.
+        if (method == "DELETE" && sub == QStringLiteral("transfer")) {
+            for (auto it = d->tabTransfers.begin(); it != d->tabTransfers.end(); ++it) {
+                if (it.value().tabIndex != index) {
+                    continue;
+                }
+                if (it.value().worker) {
+                    it.value().worker->cancelTransfer();
+                }
+                // Immediate logical release: the record stays only until the
+                // worker's finish signal (background cleanup); the tab slot
+                // and the status endpoint are free right now.
+                it.value().cancelled = true;
+                AgentAudit::log(AgentAudit::Source::Rest, it.value().action,
+                                it.value().auditDetail, QStringLiteral("cancelled by client"));
+                QJsonObject result;
+                result[QStringLiteral("ok")] = true;
+                result[QStringLiteral("cancelled")] = true;
+                respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+                return;
+            }
+            respondError(socket, 404, "No transfer is running on this tab");
+            return;
+        }
+
+        // Sudo with user consent. PH-fix 2026-09-20: fully asynchronous —
+        // the old synchronous dialog ran a NESTED event loop for up to 30 s,
+        // racing the MCP client's own 30 s tool timeout (the client
+        // occasionally saw an empty reply = "executed=None"). The request
+        // hangs off PendingOp like exec/transfers; the callback responds.
         if (method == "POST" && sub == QStringLiteral("sudo")) {
             QJsonObject body;
             QString bodyError;
@@ -884,89 +1004,95 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
                 respondError(socket, 400, "Missing command");
                 return;
             }
-
-            // User confirmation gate (per-tab, once per tab lifetime). The
-            // reason code matters: a bare "User rejected" used to also cover
-            // drifted indices and unanswered (invisible) dialogs, so callers
-            // could not tell a denial from a popup nobody ever saw.
-            QString reason;
-            if (!d->tabs->confirmSudo(index, command, &reason)) {
-                AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("sudo"),
-                                QStringLiteral("tab=%1 cmd=\"%2\"").arg(index).arg(command),
-                                QStringLiteral("rejected: %1").arg(reason));
-                if (reason == QLatin1String("unknown_tab")) {
-                    respondError(socket, 404, "Unknown tab (index may have drifted; use the "
-                                              "drift-safe ref from GET /api/v1/tabs): " + indexText);
-                    return;
-                }
-                QJsonObject result;
-                result[QStringLiteral("error")] =
-                    reason == QLatin1String("timeout")
-                        ? QStringLiteral("Sudo confirmation timed out after 30 s: the dialog was "
-                                         "not answered (it may be hidden or on another desktop). "
-                                         "Retry; check the hssh window/taskbar.")
-                        : QStringLiteral("User rejected the sudo request");
-                result[QStringLiteral("reason")] = reason;
-                respond(socket, 403, QJsonDocument(result).toJson(QJsonDocument::Compact));
-                return;
-            }
-
             // Password is optional: cipher, stored credential, or none.
             QString secret;
             const QString cipher = body.value(QStringLiteral("passwordCipher")).toString();
             if (!cipher.isEmpty()) {
-                bool ok = false;
-                const QByteArray plain = Crypto::rsaDecrypt(cipher.toUtf8(), &ok);
-                if (!ok) {
-                    respondError(socket, 503, "Failed to decrypt passwordCipher (locked or bad cipher)");
+                bool cipherOk = false;
+                const QByteArray plain = Crypto::rsaDecrypt(cipher.toUtf8(), &cipherOk);
+                if (!cipherOk) {
+                    respondError(socket, 503,
+                                 "Failed to decrypt passwordCipher (locked or bad cipher)");
                     return;
                 }
                 secret = QString::fromUtf8(plain);
             }
-            // Stored credential is the default for tabs opened from a saved
-            // session (the user confirmation popup is the consent gate);
-            // pass useStoredCredential:false explicitly to opt out.
             const bool useStored = body.value(QStringLiteral("useStoredCredential")).toBool(true);
             const int timeoutMs = body.value(QStringLiteral("timeout")).toInt(60000);
 
-            QString output;
-            QString errorMessage;
-            bool timedOut = false;
-            int exitCode = -1;
-            const bool ok = d->tabs->sudoExec(index, command, secret, useStored, timeoutMs,
-                                               &output, &timedOut, &exitCode, &errorMessage);
-            secret.fill(QLatin1Char('\0'));
-            if (!ok) {
-                AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("sudo"),
-                                QStringLiteral("tab=%1 cmd=\"%2\"").arg(index).arg(command),
-                                QStringLiteral("error: %1").arg(errorMessage));
-                const int status = errorMessage == QLatin1String("passwordRequired") ? 428 : 500;
-                QJsonObject result;
-                result[QStringLiteral("error")] = errorMessage;
-                if (status == 428) {
-                    result[QStringLiteral("passwordRequired")] = true;
+            const QString requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            Impl::PendingOp op;
+            op.socket = socket;
+            op.action = QStringLiteral("sudo");
+            op.detail = QStringLiteral("tab=%1 cmd=\"%2\"").arg(index).arg(command);
+            op.startedMs = QDateTime::currentMSecsSinceEpoch();
+            d->pendingOps[requestId] = op;
+            AgentAudit::log(AgentAudit::Source::Rest, op.action, op.detail,
+                            QStringLiteral("invoked (async consent)"));
+
+            d->tabs->sudoAsync(index, command, secret, useStored, timeoutMs,
+                [this, requestId, index, indexText](
+                    const AgentTabsInterface::SudoAsyncResult &r) {
+                const auto opIt = d->pendingOps.find(requestId);
+                if (opIt == d->pendingOps.end()) {
+                    return; // client went away; nothing to answer
                 }
-                respond(socket, status, QJsonDocument(result).toJson(QJsonDocument::Compact));
-                return;
-            }
-            AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("sudo"),
-                            QStringLiteral("tab=%1 cmd=\"%2\"").arg(index).arg(command),
-                            timedOut ? QStringLiteral("ok (timed out)")
-                                     : QStringLiteral("ok"));
-            QJsonObject result;
-            result[QStringLiteral("output")] = output;
-            result[QStringLiteral("timedOut")] = timedOut;
-            // executed=false means the completion sentinel never appeared:
-            // the command was NOT confirmed to have run (popup delayed/
-            // rejected downstream, busy terminal, wedged sudo prompt). Always
-            // verify executed + exitCode before trusting a sudo result.
-            result[QStringLiteral("executed")] = !timedOut;
-            result[QStringLiteral("exitCode")] = exitCode;
-            const QString sudoTarget = tabTarget(index);
-            if (!sudoTarget.isEmpty()) {
-                result[QStringLiteral("target")] = sudoTarget;
-            }
-            respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+                const Impl::PendingOp pend = opIt.value();
+                d->pendingOps.erase(opIt);
+
+                if (!r.confirmed) {
+                    AgentAudit::log(AgentAudit::Source::Rest, pend.action, pend.detail,
+                                    QStringLiteral("rejected: %1").arg(r.reason));
+                    if (r.reason == QLatin1String("unknown_tab")) {
+                        respondError(pend.socket, 404,
+                                     "Unknown tab (index may have drifted; use the "
+                                     "drift-safe ref from GET /api/v1/tabs): " + indexText);
+                        return;
+                    }
+                    QJsonObject result;
+                    result[QStringLiteral("error")] =
+                        r.reason == QLatin1String("timeout")
+                            ? QStringLiteral("Sudo confirmation timed out after 30 s: the "
+                                             "dialog was not answered (it may be hidden or "
+                                             "on another desktop). Retry; check the hssh "
+                                             "window/taskbar.")
+                            : QStringLiteral("User rejected the sudo request");
+                    result[QStringLiteral("reason")] = r.reason;
+                    respond(pend.socket, 403,
+                            QJsonDocument(result).toJson(QJsonDocument::Compact));
+                    return;
+                }
+                if (!r.ran) {
+                    AgentAudit::log(AgentAudit::Source::Rest, pend.action, pend.detail,
+                                    QStringLiteral("error: %1").arg(r.errorMessage));
+                    const int status =
+                        r.errorMessage == QLatin1String("passwordRequired") ? 428 : 500;
+                    QJsonObject result;
+                    result[QStringLiteral("error")] = r.errorMessage;
+                    if (status == 428) {
+                        result[QStringLiteral("passwordRequired")] = true;
+                    }
+                    respond(pend.socket, status,
+                            QJsonDocument(result).toJson(QJsonDocument::Compact));
+                    return;
+                }
+                AgentAudit::log(AgentAudit::Source::Rest, pend.action, pend.detail,
+                                r.timedOut ? QStringLiteral("ok (timed out)")
+                                           : QStringLiteral("ok"));
+                QJsonObject result;
+                result[QStringLiteral("output")] = r.output;
+                result[QStringLiteral("timedOut")] = r.timedOut;
+                // executed=false means the completion sentinel never appeared:
+                // the command was NOT confirmed to have run. Always verify
+                // executed + exitCode before trusting a sudo result.
+                result[QStringLiteral("executed")] = !r.timedOut;
+                result[QStringLiteral("exitCode")] = r.exitCode;
+                const QString sudoTarget = tabTarget(index);
+                if (!sudoTarget.isEmpty()) {
+                    result[QStringLiteral("target")] = sudoTarget;
+                }
+                respond(pend.socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+            });
             return;
         }
 
@@ -1039,6 +1165,37 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
             return;
         }
 
+        // PH2-10: ZMODEM send (local file -> remote rz). The engine types
+        // "rz" itself and reports progress on the terminal.
+        if (method == "POST" && sub == QStringLiteral("zsend")) {
+            QJsonObject body;
+            QString bodyError;
+            if (!parseJsonBody(request.body, &body, &bodyError)) {
+                respondError(socket, 400, bodyError);
+                return;
+            }
+            const QString localPath = body.value(QStringLiteral("localPath")).toString();
+            if (localPath.isEmpty()) {
+                respondError(socket, 400, "localPath is required");
+                return;
+            }
+            if (!d->tabs->zmodemSendToTab(index, localPath)) {
+                respondError(socket, 409,
+                             "Cannot start ZMODEM send (a transfer is active, or the "
+                             "file is unreadable/empty): " + localPath);
+                return;
+            }
+            AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("tab_zsend"),
+                            QStringLiteral("tab=%1 local=%2").arg(index).arg(localPath),
+                            QStringLiteral("invoked"));
+            QJsonObject result;
+            result[QStringLiteral("ok")] = true;
+            result[QStringLiteral("started")] = true;
+            result[QStringLiteral("target")] = tabTarget(index);
+            respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
+            return;
+        }
+
         // Reconnect a disconnected SSH tab (Enter-to-reconnect equivalent).
         if (method == "POST" && sub == QStringLiteral("reconnect")) {
             if (!d->tabs->reconnectTab(index)) {
@@ -1087,21 +1244,31 @@ void AgentHttpServer::startTabTransferWorker(const QString &requestId, const QSt
     Impl::TabTransfer &transfer = it.value();
 
     TransferSession *worker = nullptr;
+    // CRITICAL: workers must be parentless. SftpSession/ChannelCopySession
+    // moveToThread their worker thread in the constructor — a parented
+    // QObject refuses the move, silently leaving the transfer running on
+    // the GUI thread (freezing every agent call for the whole transfer —
+    // the 2026-09-18 exec-blocked-during-download report). Cleanup is
+    // deleteLater on finish plus AgentHttpServer::stop().
     if (method == QLatin1String("scp")) {
-        worker = new ChannelCopySession(transfer.config, ChannelCopySession::Mode::Scp, this);
+        worker = new ChannelCopySession(transfer.config, ChannelCopySession::Mode::Scp);
     } else if (method == QLatin1String("shell")) {
-        worker = new ChannelCopySession(transfer.config, ChannelCopySession::Mode::Base64, this);
+        worker = new ChannelCopySession(transfer.config, ChannelCopySession::Mode::Base64);
     } else {
-        worker = new SftpSession(transfer.config, this);
+        worker = new SftpSession(transfer.config);
     }
     transfer.worker = worker;
+    transfer.currentMethod = method;
 
     // Keep the audit detail in sync with the method actually running
     // (fallbacks rewrite it).
-    auto opIt = d->pendingOps.find(requestId);
-    if (opIt != d->pendingOps.end()) {
+    {
         static const QRegularExpression methodRe(QStringLiteral("method=\\S+"));
-        opIt.value().detail.replace(methodRe, QStringLiteral("method=") + method);
+        transfer.auditDetail.replace(methodRe, QStringLiteral("method=") + method);
+        auto opIt = d->pendingOps.find(requestId);
+        if (opIt != d->pendingOps.end()) {
+            opIt.value().detail = transfer.auditDetail;
+        }
     }
 
     // NB: when the initial connect fails, errorOccurred fires AND the queued
@@ -1116,10 +1283,13 @@ void AgentHttpServer::startTabTransferWorker(const QString &requestId, const QSt
                 onTabTransferFinished(requestId, QString(), false, message);
             });
     connect(worker, &TransferSession::transferProgress, this,
-            [this, requestId](const QString &, qint64 bytesDone, qint64) {
+            [this, requestId](const QString &, qint64 bytesDone, qint64 bytesTotal) {
                 auto tt = d->tabTransfers.find(requestId);
                 if (tt != d->tabTransfers.end()) {
                     tt.value().bytesDone = bytesDone;
+                    if (bytesTotal > 0) {
+                        tt.value().bytesTotal = bytesTotal;
+                    }
                 }
             });
     worker->start();
@@ -1141,8 +1311,10 @@ void AgentHttpServer::onTabTransferFinished(const QString &requestId, const QStr
     // "auto" fallback: walk the remaining chain while the failing method
     // never got a single byte across (subsystem/channel-level failure).
     // A failure after bytes moved is a real error and is reported as-is.
-    if (!ok && !tt.value().remainingMethods.isEmpty() && tt.value().bytesDone == 0
-        && d->pendingOps.contains(requestId)) {
+    // A user-cancelled transfer never falls back.
+    if (!ok && !tt.value().cancelled && !tt.value().remainingMethods.isEmpty()
+        && tt.value().bytesDone == 0
+        && (d->pendingOps.contains(requestId) || tt.value().async)) {
         TransferSession *old = tt.value().worker;
         const QString failedMethod = old ? old->metaObject()->className() : QString();
         AgentAudit::log(AgentAudit::Source::Rest,
@@ -1161,6 +1333,9 @@ void AgentHttpServer::onTabTransferFinished(const QString &requestId, const QStr
     }
 
     TransferSession *worker = tt.value().worker;
+    const bool wasAsync = tt.value().async;
+    const QString auditAction = tt.value().action;
+    const QString auditDetail = tt.value().auditDetail;
     d->tabTransfers.erase(tt);
 
     const auto opIt = d->pendingOps.find(requestId);
@@ -1183,6 +1358,12 @@ void AgentHttpServer::onTabTransferFinished(const QString &requestId, const QStr
             }
             respond(op.socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
         }
+    } else if (wasAsync) {
+        // Async transfers outlive their starting request: the completion is
+        // only visible through the audit log (and the file itself).
+        AgentAudit::log(AgentAudit::Source::Rest, auditAction, auditDetail,
+                        ok ? (message.isEmpty() ? QStringLiteral("ok (async)") : QStringLiteral("ok (async) %1").arg(message))
+                           : QStringLiteral("error (async): %1").arg(message));
     }
     if (worker) {
         worker->stop();

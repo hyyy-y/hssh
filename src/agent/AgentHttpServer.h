@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
+#include <functional>
 #include <memory>
 
 class QTcpServer;
@@ -31,6 +32,10 @@ public:
     // Sends raw input verbatim (no auto-Enter): control characters like
     // Ctrl+C ("\u0003"), half-typed commands, etc.
     virtual bool sendInputToTab(int index, const QString &data) = 0;
+    // PH2-10: push a local file to the remote via ZMODEM (types rz in the
+    // visible tab and runs the send flow). False when the index is invalid
+    // or the engine cannot start.
+    virtual bool zmodemSendToTab(int index, const QString &localPath) = 0;
     // Last maxLines rows of the terminal buffer; false for invalid index.
     virtual bool readTab(int index, int maxLines, QString *text) const = 0;
     // Windowed read: fromLine rows into the content, maxLines caps it (0=all).
@@ -81,6 +86,27 @@ public:
                           bool useStoredCredential, int timeoutMs,
                           QString *output, bool *timedOut, int *exitCode,
                           QString *errorMessage) = 0;
+
+    // PH-fix 2026-09-20: fully asynchronous sudo. The confirmation dialog
+    // must NOT run a nested event loop for 30 s: while it did, the HTTP
+    // response raced the MCP client's own 30 s tool timeout — the client
+    // occasionally saw an empty reply ("executed=None"). Implementations
+    // deliver the callback exactly once; `confirmed` reflects the user
+    // gate (reason: unknown_tab/user_rejected/timeout on false), `ran`
+    // the execution phase.
+    struct SudoAsyncResult {
+        bool confirmed = false;
+        QString reason;        // unknown_tab / user_rejected / timeout
+        bool ran = false;      // sudoExec succeeded
+        QString output;        // execution-phase output tail
+        bool timedOut = false; // completion sentinel never appeared
+        int exitCode = -1;
+        QString errorMessage;  // hard failure (e.g. passwordRequired)
+    };
+    using SudoAsyncCallback = std::function<void(const SudoAsyncResult &)>;
+    virtual void sudoAsync(int index, const QString &command, const QString &secret,
+                           bool useStoredCredential, int timeoutMs,
+                           const SudoAsyncCallback &cb) = 0;
 };
 
 // Local REST API (default http://127.0.0.1:8222). Everything is VISIBLE:
@@ -110,8 +136,8 @@ public:
 //                                             403 carries a "reason" code (user_rejected /
 //                                             timeout / unknown_tab) — timeout means the
 //                                             dialog went unanswered, NOT a denial
-//   POST   /api/v1/tabs/<ref>/upload          {localPath, remotePath, verify?, method?} (SSH tabs)
-//   POST   /api/v1/tabs/<ref>/download        {remotePath, localPath, verify?, method?} (SSH tabs)
+//   POST   /api/v1/tabs/<ref>/upload          {localPath, remotePath, verify?, method?, async?} (SSH tabs)
+//   POST   /api/v1/tabs/<ref>/download        {remotePath, localPath, verify?, method?, async?} (SSH tabs)
 //                                             method: "sftp" (default, resumable) / "scp"
 //                                             (remote scp binary) / "shell" (base64 over
 //                                             exec channel — no sftp-server needed) /
@@ -119,6 +145,12 @@ public:
 //                                             moved). Both directions verify content
 //                                             (md5 + change detection) by default and
 //                                             retry once over a fresh connection.
+//                                             Downloads land as "<local>.part" and are
+//                                             renamed atomically on success. async:true
+//                                             starts the transfer and answers immediately
+//                                             (poll GET /transfer; cancel DELETE /transfer).
+//   GET    /api/v1/tabs/<ref>/transfer        {active, direction?, method?, bytesDone?, ...}
+//   DELETE /api/v1/tabs/<ref>/transfer        cancels the tab's transfer (keeps the .part)
 //   DELETE /api/v1/tabs/<ref>                 (closes the tab)
 // Tab <ref>: legacy positional index, or drift-safe "<name>[:<ordinal>]"
 // (name = sessionName/host/title; ordinal counts same-name tabs, 1-based).

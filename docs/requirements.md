@@ -1,4 +1,4 @@
-# HSSH 需求文档
+﻿# HSSH 需求文档
 
 > **项目代号**：hssh  
 > **目标**：打造一款完全开源、跨平台、功能全面的 GUI SSH 客户端，并内置 Agent 能力，可被 Claude Code 及其他外部工具调用。
@@ -78,12 +78,12 @@
 
 - [x] 支持 VT100 / VT220 / VT340 / VT420 / VT520 / Xterm / Xterm-256color（libvterm）。
 - [x] 支持 Unicode、Emoji、True Color（libvterm）。
-- [ ] 支持鼠标协议。
+- [x] 支持鼠标协议。（PH1-04，2026-09-20：VTERM_PROP_MOUSE 门控，Shift 绕过走本地选择）
 - [x] 支持滚动回滚（可配置行数，无限制）。
 - [x] 支持多标签页（分屏未实现）。
 - [x] 支持搜索、高亮、选中复制、右键粘贴。
 - [ ] 支持时间戳、输出折叠、大纲视图。
-- [ ] 支持自定义字体、颜色主题、背景透明度。
+- [x] 支持自定义字体、颜色主题、背景透明度。（PH1-05，2026-09-20：字体/三主题/窗口不透明度；仅终端背景 alpha 暂缓）
 - [ ] 调整宽度时内容重排（reflow）。
 - [x] 支持 Powerline / Oh-My-Zsh / Oh-My-Posh 字体渲染（libvterm）。
 - [x] 支持本地 Shell：
@@ -97,7 +97,7 @@
   - [x] 拖拽传输（SftpWidget 拖放上传）
   - [x] 断点续传（PH1-01，单文件与目录均支持，取消/失败保留断点文件）
   - [x] 批量队列（TransfersWidget）
-- [ ] 支持 SCP。
+- [x] 支持 SCP。（2026-09-07：agent 传输层 method=scp）
 - [ ] 支持 ZMODEM / YMODEM / XMODEM（rz/sz）。
 - [x] 本地文件管理器集成。
 - [x] 文件对比与同步（FileCompareWidget：目录对比、Diff 预览、批量同步，额外实现）。
@@ -107,16 +107,16 @@
 - [x] 本地端口转发（Local Forward）。
 - [x] 远程端口转发（Remote Forward）。
 - [x] 动态端口转发（SOCKS5 Proxy / Dynamic Forward）。
-- [ ] HTTP / SOCKS5 代理支持。
-- [ ] Jump Host / ProxyJump / ProxyCommand。
+- [x] HTTP / SOCKS5 代理支持。（PH1-02，2026-09-20：SOCKS5 含用户密码认证 RFC1929 + HTTP CONNECT Basic；SSH_OPTIONS_FD 交给 libssh）
+- [x] Jump Host / ProxyJump / ProxyCommand。（PH1-03 方案A，2026-09-20：跳板 direct-tcpip 通道 + 回环 socketpair + 单泵线程自毁式隧道；ProxyCommand 暂未做）
 - [ ] X11 转发。
 
 ### 3.5 高级功能
 
-- [ ] 命令面板（Command Palette）。
+- [x] 命令面板（Command Palette）。（PH2-07，2026-09-21：Ctrl+Shift+P，菜单/会话/标签模糊搜索 + 最近使用）
 - [x] 命令发送器（批量发送命令到多个会话）。
-- [ ] 同步输入（Sync Input，多会话同时输入）。
-- [ ] 自由输入模式（Free Type Mode）。
+- [x] 同步输入（Sync Input，多会话同时输入）。（PH2-08，2026-09-20：标签右键 Sync Input 开关，键盘输入组内互镜像，镜像走 API 路径无回环）
+- [x] 自由输入模式（Free Type Mode）。（PH2-08，2026-09-21：工具栏 Free Type 切换，确认后键盘镜像到全部其他 SSH 标签）
 - [x] 专注模式（Focus Mode）。
 - [x] 会话日志记录（自动记录到 AppData/logs，Config `session/logging` 开关）
 - [x] 屏幕锁定（Lock Screen）。
@@ -127,7 +127,7 @@
 ### 3.6 安全
 
 - [x] 主密码保护（AES-256-GCM 加密用户数据）。
-- [ ] SSH 密钥管理器（生成、导入、导出、Agent 转发）。
+- [x] SSH 密钥管理器（生成、导入、导出、Agent 转发）。PH1-09 2026-09-21：KeyManagerDialog（列表/生成/导入/导出公钥/删除）+ 会话认证引用 KeyStore 密钥；生成仅 Ed25519（mbedTLS 后端限制），ppk 导入待 B7。
 - [ ] 支持 FIDO2 / YubiKey（未来扩展）。
 - [x] 不收集用户数据，完全本地运行。
 
@@ -242,7 +242,7 @@ Claude Code → 调用 hssh MCP → hssh 使用已保存的会话连接 → 执�
 - [ ] **稳定性**：7x24 小时连接不崩溃，断网自动重连。
 - [ ] **可扩展性**：插件 API 设计清晰，支持第三方扩展。
 - [ ] **可维护性**：代码结构清晰，单元测试覆盖率 > 60%。
-- [ ] **国际化**：支持中文、英文，架构上易于扩展其他语言。
+- [x] **国际化**：支持中文、英文，架构上易于扩展其他语言。（2026-09-20：lupdate 刷新+zh_CN 填充，qt_add_translations 全链路）
 - [ ] **无障碍**：支持高对比度主题、键盘快捷键。
 
 ---

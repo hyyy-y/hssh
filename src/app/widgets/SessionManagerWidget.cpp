@@ -45,6 +45,12 @@ protected:
                 || config.username().contains(text, Qt::CaseInsensitive)) {
                 return true;
             }
+            // PH2-15: tags participate in the quick filter.
+            for (const QString &tag : config.tags()) {
+                if (tag.contains(text, Qt::CaseInsensitive)) {
+                    return true;
+                }
+            }
         }
 
         for (int row = 0; row < sourceModel()->rowCount(index); ++row) {
@@ -53,6 +59,35 @@ protected:
             }
         }
         return false;
+    }
+
+    bool lessThan(const QModelIndex &left, const QModelIndex &right) const override
+    {
+        // PH2-15 ordering within a parent: folders first, then favorites,
+        // then alphabetical. Everything else stays Qt's default compare.
+        const int leftType = sourceModel()->data(
+            left, static_cast<int>(SessionModel::Role::NodeTypeRole)).toInt();
+        const int rightType = sourceModel()->data(
+            right, static_cast<int>(SessionModel::Role::NodeTypeRole)).toInt();
+        const bool leftFolder = (leftType == static_cast<int>(SessionModel::NodeType::Folder));
+        const bool rightFolder = (rightType == static_cast<int>(SessionModel::NodeType::Folder));
+        if (leftFolder != rightFolder) {
+            return leftFolder;
+        }
+        if (!leftFolder) {
+            const QVariant lv = sourceModel()->data(
+                left, static_cast<int>(SessionModel::Role::SessionConfigRole));
+            const QVariant rv = sourceModel()->data(
+                right, static_cast<int>(SessionModel::Role::SessionConfigRole));
+            if (lv.isValid() && rv.isValid()) {
+                const SessionConfig lc = qvariant_cast<SessionConfig>(lv);
+                const SessionConfig rc = qvariant_cast<SessionConfig>(rv);
+                if (lc.favorite() != rc.favorite()) {
+                    return lc.favorite();
+                }
+            }
+        }
+        return QSortFilterProxyModel::lessThan(left, right);
     }
 };
 
@@ -74,6 +109,9 @@ SessionManagerWidget::SessionManagerWidget(QWidget *parent)
 
     m_proxy->setSourceModel(m_model);
     m_proxy->setRecursiveFilteringEnabled(false);
+    // PH2-15: folders → favorites → alphabetical within each parent.
+    m_proxy->setSortRole(Qt::DisplayRole);
+    m_proxy->sort(0);
 
     m_treeView = new QTreeView(this);
     m_treeView->setHeaderHidden(true);
@@ -149,6 +187,22 @@ void SessionManagerWidget::onContextMenu(const QPoint &pos)
         menu.addAction(tr("Edit"), this, [this, sourceIndex]() {
             emit editRequested(sourceIndex);
         });
+        menu.addAction(tr("Duplicate"), this, [this, sourceIndex]() {
+            emit duplicateRequested(sourceIndex);
+        });
+
+        // PH2-15: favorite/tags apply to sessions only.
+        if (m_model->nodeType(sourceIndex) == SessionModel::NodeType::Session) {
+            const bool isFavorite = m_model->sessionConfig(sourceIndex).favorite();
+            menu.addAction(isFavorite ? tr("Remove from Favorites") : tr("Add to Favorites"),
+                           this, [this, sourceIndex]() {
+                               emit favoriteToggleRequested(sourceIndex);
+                           });
+            menu.addAction(tr("Edit Tags..."), this, [this, sourceIndex]() {
+                emit tagsEditRequested(sourceIndex);
+            });
+        }
+
         menu.addAction(tr("Remove"), this, [this, sourceIndex]() {
             emit removeRequested(sourceIndex);
         });

@@ -137,6 +137,26 @@ POST /api/v1/tabs/<ref>/sudo
 
 **远端文件在传输期间被并发改写**（周期性再生的状态文件等）时校验会一直失败——这不是 bug，是在如实报告"拿不到稳定快照"；等生成间歇期再拉，或用 `verify:false` 自担风险。
 
+**下载原子落盘**：所有下载先写 `<local>.part`，校验通过后原子改名到最终路径——超时/被杀/断电都不会在真实文件名下留下半截文件。`.part` 也是 sftp 断点续传的载体（失败重试从 `.part` 续传）。
+
+### 5.2.2 长传输：异步模式 + 状态查询 + 取消（大文件必读）
+
+MCP 客户端通常有自己的工具超时（常见 30s）——**客户端超时不会终止服务端传输**（传输继续跑完并校验，只是结果不再返回给那次调用）。两种正确姿势：
+
+1. **同步等待**（默认，`wait:true`）：适合几秒内能完成的传输。若超过客户端超时，调用"失败"但传输继续——之后用状态查询确认结果，**不要盲目重试**（同标签重试会 409 保护，但换标签重试会产生两条流）。
+2. **异步启动**（`wait:false` / REST `"async":true`）：立即返回 `{started, method, direction, target}`，然后轮询：
+
+```powershell
+# REST
+POST /api/v1/tabs/<ref>/download {"remotePath":"...","localPath":"...","async":true}
+GET  /api/v1/tabs/<ref>/transfer     # {active, direction, method, bytesDone, bytesTotal, elapsedMs}
+DELETE /api/v1/tabs/<ref>/transfer   # 取消（保留 .part 供 sftp 续传）
+```
+
+MCP 对应：`ssh_download`/`ssh_upload` 传 `wait:false` → 轮询 `ssh_transfer_status(session)` → 必要时 `ssh_transfer_cancel(session)`。`active:false` = 没有传输在跑（上一次的结果看审计日志；成功 = 文件已在最终路径且 md5 已校验）。
+
+**exec 不受传输影响**：传输走独立连接 + 独立线程，传输期间同标签 exec 照常可用（可用它 `ls -l` 观察远端文件）。
+
 ### 5.3 exec 语义（`/tabs/<ref>/exec`）
 
 把命令**打进可视终端**（用户在窗口里实时看到），用唯一开始/结束标记（`__HSSH_EXEC_B_<token>__` / `__HSSH_EXEC_E_<token>__<退出码>`）圈定输出，150ms 轮询缓冲区直到结束标记出现：
@@ -188,7 +208,9 @@ POST /api/v1/tabs/<ref>/sudo
 | `ssh_exec` | 在可视标签里执行命令，返回 `{output, exitCode, timedOut, target, warning?, hint?}`（语义同 5.3；timeout 默认 120s、0=不限；可选 `reset` 清场）。断线标签会**自动触发重连**并等连接恢复；按名命中 stale 标签会**拒绝执行**并说明（用显式 ref 或先 ssh_disconnect） |
 | `ssh_send` | 发原始输入（按键、Ctrl+C 等控制字符） |
 | `ssh_read` | 读终端缓冲区（lines/from 游标） |
-| `ssh_upload` / `ssh_download` | 独立连接传输，不占终端；两个方向默认 MD5 校验（不符自动换连接整文件重试一次）。可选 `method`: `sftp`（默认）/ `scp` / `shell`（base64，无 sftp-server 也能传）/ `auto`（回退链）；可选 `verify` |
+| `ssh_upload` / `ssh_download` | 独立连接+独立线程传输（不阻塞 exec）；两向默认 MD5 校验；下载 `.part` 原子落盘。可选 `method`: `sftp`（默认）/ `scp` / `shell` / `auto`；可选 `verify`；**大文件传 `wait:false`** 立即返回，配 `ssh_transfer_status` 轮询（客户端 30s 超时不会杀服务端传输） |
+| `ssh_transfer_status` | 查该标签传输进度 `{active, direction, method, bytesDone, bytesTotal, elapsedMs}` |
+| `ssh_transfer_cancel` | 取消该标签传输（保留 `.part` 供 sftp 续传） |
 | `ssh_sudo` | sudo（弹窗确认在 **GUI 窗口**；密码来自库存凭据或用户亲手输入，永不进 AI 上下文；"Always allow" 永久授权）。务必核对 `executed`+`exitCode`。**复合命令必须 `sudo bash -c '...'` + 绝对路径**——`sudo a && b` 只有 a 是 root，`$PWD`/`~` 在 sudo 前就被外层 shell 展开 |
 | `ssh_disconnect` | 关闭标签页 |
 | `get_public_key` | 取 RSA 公钥（本地操作，不需要 agent） |

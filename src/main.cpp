@@ -1,4 +1,4 @@
-#include <QApplication>
+﻿#include <QApplication>
 #include <QCoreApplication>
 #include <QCommandLineParser>
 #include <QFile>
@@ -10,9 +10,12 @@
 #include <QLocale>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QPalette>
 #include <QTextStream>
 #include <QTimer>
+#include <QTime>
 #include <QTranslator>
 
 #include "agent/AgentAudit.h"
@@ -22,7 +25,9 @@
 #include "core/SessionConfig.h"
 #include "core/SshConnect.h"
 #include "hssh/Version.h"
+#include "utils/Config.h"
 #include "utils/Crypto.h"
+#include "utils/Theme.h"
 
 #ifdef HSSH_HAS_LIBSSH
 #include <libssh/libssh.h>
@@ -114,42 +119,6 @@ bool readPasswordFromConsole(QString *out)
     *out = QString::fromUtf8(line.c_str());
     return true;
 #endif
-}
-
-void applyDarkTheme(QApplication &app)
-{
-    // Dark palette for native widgets that QSS does not fully cover
-    // (dialogs, spin box buttons, disabled text, ...).
-    QPalette palette;
-    const QColor window(0x25, 0x25, 0x26);
-    const QColor base(0x1b, 0x1b, 0x1c);
-    const QColor text(0xcc, 0xcc, 0xcc);
-    const QColor disabled(0x6a, 0x6a, 0x6a);
-    const QColor accent(0x26, 0x4f, 0x78);
-
-    palette.setColor(QPalette::Window, window);
-    palette.setColor(QPalette::WindowText, text);
-    palette.setColor(QPalette::Base, base);
-    palette.setColor(QPalette::AlternateBase, QColor(0x23, 0x23, 0x24));
-    palette.setColor(QPalette::ToolTipBase, QColor(0x2d, 0x2d, 0x30));
-    palette.setColor(QPalette::ToolTipText, text);
-    palette.setColor(QPalette::Text, text);
-    palette.setColor(QPalette::Button, QColor(0x33, 0x33, 0x38));
-    palette.setColor(QPalette::ButtonText, text);
-    palette.setColor(QPalette::BrightText, Qt::white);
-    palette.setColor(QPalette::Link, QColor(0x00, 0x7a, 0xcc));
-    palette.setColor(QPalette::Highlight, accent);
-    palette.setColor(QPalette::HighlightedText, Qt::white);
-    palette.setColor(QPalette::PlaceholderText, disabled);
-    palette.setColor(QPalette::Disabled, QPalette::Text, disabled);
-    palette.setColor(QPalette::Disabled, QPalette::WindowText, disabled);
-    palette.setColor(QPalette::Disabled, QPalette::ButtonText, disabled);
-    app.setPalette(palette);
-
-    QFile styleFile(QStringLiteral(":/styles/dark.qss"));
-    if (styleFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        app.setStyleSheet(QString::fromUtf8(styleFile.readAll()));
-    }
 }
 
 bool loadApplicationTranslator(QApplication &app)
@@ -408,6 +377,31 @@ int runAgentCli(int argc, char *argv[], bool mcpMode)
 
 int main(int argc, char *argv[])
 {
+    // Test observability: HSSH_DEBUG_LOG=<file> mirrors qDebug/qInfo/qWarning
+    // to a file (GUI subsystem builds have no console).
+    if (qEnvironmentVariableIsSet("HSSH_DEBUG_LOG")) {
+        const QString dbgPath = qEnvironmentVariable("HSSH_DEBUG_LOG");
+        QFile *dbgFile = new QFile(dbgPath);
+        if (dbgFile->open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+            static QFile *g_dbgFile = dbgFile; // captured via static for the handler
+            qInstallMessageHandler([](QtMsgType type, const QMessageLogContext &,
+                                      const QString &message) {
+                static QMutex mutex;
+                QMutexLocker locker(&mutex);
+                const char *tag = type == QtDebugMsg ? "DBG "
+                                  : type == QtWarningMsg ? "WRN "
+                                  : type == QtCriticalMsg ? "CRT "
+                                  : type == QtFatalMsg ? "FTL " : "INF ";
+                QTextStream(g_dbgFile)
+                    << QTime::currentTime().toString(QStringLiteral("hh:mm:ss.zzz")) << ' '
+                    << tag << message << '\n';
+                g_dbgFile->flush();
+            });
+        } else {
+            delete dbgFile;
+        }
+    }
+
     const QStringList rawArgs = [&]() {
         QStringList list;
         for (int i = 0; i < argc; ++i) {
@@ -436,7 +430,9 @@ int main(int argc, char *argv[])
 
     loadQtTranslator(app);
     loadApplicationTranslator(app);
-    applyDarkTheme(app);
+    hssh::applyTheme(app, hssh::Config::instance()
+                                .value(QStringLiteral("ui/theme"), QStringLiteral("dark"))
+                                .toString());
 
     // Master-password mode: stored secrets cannot be read until unlocked.
     while (hssh::Crypto::usesMasterPassword() && !hssh::Crypto::isUnlocked()) {
@@ -454,14 +450,38 @@ int main(int argc, char *argv[])
         }
     }
 
-    hssh::MainWindow window;
-    window.show();
-
     // --agent: start the local REST agent with the GUI. The MCP bridge
     // auto-launches the GUI this way when no agent is reachable.
+    // --agent --port N: bind a different port (secondary test instances;
+    // the primary GUI keeps 8222). The port must reach the constructor:
+    // agent/autostart fires during it and would otherwise grab 8222.
+    int agentPort = 8222;
     if (rawArgs.contains(QStringLiteral("--agent"))) {
-        QTimer::singleShot(0, &window, [&window]() {
-            window.startAgent();
+        const int portIdx = rawArgs.indexOf(QStringLiteral("--port"));
+        if (portIdx >= 0 && portIdx + 1 < rawArgs.size()) {
+            bool portOk = false;
+            const int parsed = rawArgs.at(portIdx + 1).toInt(&portOk);
+            if (portOk && parsed > 0 && parsed < 65536) {
+                agentPort = parsed;
+            }
+        }
+    }
+    // --no-restore: test instances skip the crash-restore prompt (must also
+    // reach the constructor — restorePreviousTabs runs during it).
+    const bool skipRestore = rawArgs.contains(QStringLiteral("--no-restore"));
+    hssh::MainWindow window(agentPort, skipRestore);
+    window.show();
+    // PH1-05: persisted window opacity (percent; 100 = opaque).
+    const int windowOpacity = hssh::Config::instance()
+                                  .value(QStringLiteral("ui/windowOpacity"), 100)
+                                  .toInt();
+    if (windowOpacity < 100) {
+        window.setWindowOpacity(windowOpacity / 100.0);
+    }
+
+    if (rawArgs.contains(QStringLiteral("--agent"))) {
+        QTimer::singleShot(0, &window, [&window, agentPort]() {
+            window.startAgent(agentPort);
         });
     }
 

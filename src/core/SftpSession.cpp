@@ -355,7 +355,7 @@ void SftpSession::doDownload(const QString &remotePath, const QString &localPath
             return;
         }
         if (retryable && attempt == 1 && !m_cancelTransfer && reconnectSftp()) {
-            QFile::remove(localPath); // suspect prefix: never resume into it
+            QFile::remove(localPath + QStringLiteral(".part")); // suspect prefix: never resume into it
             continue;
         }
         emit transferFinished(remotePath, false, error);
@@ -388,18 +388,27 @@ bool SftpSession::downloadAttempt(const QString &remotePath, const QString &loca
     const qint64 total = static_cast<qint64>(attr->size);
     const qint64 mtimeBefore = static_cast<qint64>(attr->mtime);
     sftp_attributes_free(attr);
+    // Report the size immediately: the agent's status endpoint shows
+    // bytesTotal=0 until the first progress chunk otherwise (2026-09-20).
+    emit transferProgress(remotePath, 0, total);
 
-    QFile local(localPath);
+    // Atomic landing: bytes stream into "<local>.part" and are renamed to
+    // the final name only after success (+ verification). A caller-side
+    // timeout or crash therefore never leaves a half-written file under the
+    // real name (2026-09-18: a 232 MB download outlived its MCP tool call;
+    // the completed-looking partial would have been mistaken for the file).
+    const QString partPath = localPath + QStringLiteral(".part");
+    QFile local(partPath);
     // Nested targets (folder-compare sync) may need their parents created.
     QDir().mkpath(QFileInfo(localPath).absolutePath());
 
-    // Resume: when the local file is smaller than the remote one, continue
-    // from the local size instead of starting over (PH1-01). An equal-size
-    // local file is verified (when verify is on) before being declared
+    // Resume: when the local .part is smaller than the remote file, continue
+    // from its size instead of starting over (PH1-01). An intact final file
+    // of equal size is verified (when verify is on) before being declared
     // up to date: size alone cannot rule out in-place corruption.
     qint64 startOffset = 0;
-    if (local.exists()) {
-        const qint64 localSize = local.size();
+    if (QFile::exists(localPath)) {
+        const qint64 localSize = QFileInfo(localPath).size();
         if (localSize == total) {
             if (!verify) {
                 emit transferProgress(remotePath, total, total);
@@ -423,6 +432,7 @@ bool SftpSession::downloadAttempt(const QString &remotePath, const QString &loca
                 return true;
             }
             if (remoteDigest == localDigest) {
+                QFile::remove(partPath); // stale leftover from an old attempt
                 emit transferProgress(remotePath, total, total);
                 if (outNote) {
                     *outNote = tr("Already up to date (md5 verified: %1)")
@@ -432,13 +442,17 @@ bool SftpSession::downloadAttempt(const QString &remotePath, const QString &loca
             }
             // Content differs: fall through to a full re-download. Size
             // says nothing about byte content.
-        } else if (localSize < total && allowResume) {
-            startOffset = localSize;
+        }
+    }
+    if (local.exists()) {
+        const qint64 partSize = local.size();
+        if (partSize < total && allowResume) {
+            startOffset = partSize;
         }
     }
 
     if (!local.open(startOffset > 0 ? QIODevice::WriteOnly : QIODevice::WriteOnly | QIODevice::Truncate)) {
-        return fail(tr("Cannot write to %1").arg(localPath));
+        return fail(tr("Cannot write to %1").arg(partPath));
     }
     if (startOffset > 0) {
         local.seek(startOffset);
@@ -483,9 +497,10 @@ bool SftpSession::downloadAttempt(const QString &remotePath, const QString &loca
     }
 
     // Content verification, mirroring the upload side: remote md5sum via an
-    // exec channel, SFTP read-back when no shell is available.
+    // exec channel, SFTP read-back when no shell is available. The digest
+    // covers the .part file — it becomes the final file on success.
     if (verify) {
-        const QByteArray localDigest = localMd5Hex(localPath);
+        const QByteArray localDigest = localMd5Hex(partPath);
         QByteArray remoteDigest = remoteMd5(remotePath);
         if (remoteDigest.isEmpty()) {
             remoteDigest = remoteMd5ReadBack(remotePath);
@@ -496,10 +511,7 @@ bool SftpSession::downloadAttempt(const QString &remotePath, const QString &loca
                               "(no remote md5sum)")
                                .arg(QString::fromLatin1(localDigest));
             }
-            emit transferProgress(remotePath, done, total);
-            return true;
-        }
-        if (remoteDigest != localDigest) {
+        } else if (remoteDigest != localDigest) {
             if (outRetryable) {
                 *outRetryable = true;
             }
@@ -508,12 +520,16 @@ bool SftpSession::downloadAttempt(const QString &remotePath, const QString &loca
                            "file may be rewritten concurrently")
                             .arg(QString::fromLatin1(remoteDigest),
                                  QString::fromLatin1(localDigest)));
-        }
-        if (outNote) {
+        } else if (outNote) {
             *outNote = tr("downloaded, md5 verified: %1").arg(QString::fromLatin1(localDigest));
         }
     } else if (outNote) {
         *outNote = tr("downloaded (verification off)");
+    }
+    // Atomic landing: only now does the file appear under its real name.
+    QFile::remove(localPath);
+    if (!QFile::rename(partPath, localPath)) {
+        return fail(tr("Downloaded to %1 but failed to finalize %2").arg(partPath, localPath));
     }
     emit transferProgress(remotePath, done, total);
     return true;
@@ -627,7 +643,9 @@ void SftpSession::doDownloadDir(const QString &remotePath, const QString &localD
 
         const QString localPath = base.filePath(f.relPath);
         QDir().mkpath(QFileInfo(localPath).absolutePath());
-        QFile local(localPath);
+        // Atomic landing: stream into "<file>.part", rename on completion.
+        const QString partPath = localPath + QStringLiteral(".part");
+        QFile local(partPath);
 
         // Resume support: continue from the existing partial file.
         qint64 fileStart = 0;
@@ -636,7 +654,7 @@ void SftpSession::doDownloadDir(const QString &remotePath, const QString &localD
         }
         if (!local.open(fileStart > 0 ? QIODevice::WriteOnly
                                       : QIODevice::WriteOnly | QIODevice::Truncate)) {
-            error = tr("Cannot write to %1").arg(localPath);
+            error = tr("Cannot write to %1").arg(partPath);
             ok = false;
             break;
         }
@@ -645,6 +663,14 @@ void SftpSession::doDownloadDir(const QString &remotePath, const QString &localD
         }
         const bool fileOk = streamDownload(f.remotePath, local, remotePath, done, total, error, fileStart);
         local.close();
+        if (fileOk) {
+            QFile::remove(localPath);
+            if (!QFile::rename(partPath, localPath)) {
+                error = tr("Failed to finalize %1").arg(localPath);
+                ok = false;
+                break;
+            }
+        }
         if (!fileOk && !m_cancelTransfer) {
             ok = false;
             break;

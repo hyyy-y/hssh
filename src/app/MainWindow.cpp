@@ -1,27 +1,42 @@
-#include "MainWindow.h"
+﻿#include "MainWindow.h"
 
 #include "agent/AgentAudit.h"
 #include "agent/AgentHttpServer.h"
 #include "agent/AgentSudoAuth.h"
 #include "app/InputBroadcaster.h"
+#include "app/FloatingTabWindow.h"
 #include "app/SessionTab.h"
+#include "terminal/TerminalSession.h"
+#include "app/dialogs/AppearanceDialog.h"
+#include "app/dialogs/KeyManagerDialog.h"
 #include "app/dialogs/EditFolderDialog.h"
+#include "app/dialogs/ImportSshConfigDialog.h"
 #include "app/dialogs/NewSessionDialog.h"
 #include "app/dialogs/PortForwardDialog.h"
+#include "app/dialogs/SessionLogViewer.h"
 #include "app/dialogs/SettingsDialog.h"
+#include "app/widgets/CommandPalette.h"
 #include "app/widgets/FileCompareWidget.h"
 #include "app/widgets/LocalFileWidget.h"
 #include "app/widgets/SessionManagerWidget.h"
+#include "app/widgets/TerminalOutlineWidget.h"
 #include "app/widgets/SftpWidget.h"
 #include "app/widgets/TransfersWidget.h"
 #include "core/SessionRepository.h"
 #include "core/SshSession.h"
 #include "hssh/Version.h"
 #include "terminal/LocalShellProcess.h"
+#include "terminal/TerminalWidget.h"
 #include "utils/Config.h"
 #include "utils/Crypto.h"
 
 #include <QApplication>
+#include <QColor>
+#include <QCursor>
+#include <QIcon>
+#include <QPainter>
+#include <QShortcut>
+#include <QUuid>
 #include <QCloseEvent>
 #include <QCoreApplication>
 #include <QDialog>
@@ -60,9 +75,11 @@
 
 namespace hssh {
 
-MainWindow::MainWindow(QWidget *parent)
+MainWindow::MainWindow(int agentPort, bool skipTabRestore, QWidget *parent)
     : QMainWindow(parent)
     , m_sessionRepository(new SessionRepository(this))
+    , m_agentPort(agentPort)
+    , m_skipTabRestore(skipTabRestore)
 {
     setupUi();
     setWindowTitle("hssh - Modern SSH Client");
@@ -86,6 +103,18 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Restore the tabs that were open in the previous run.
     restorePreviousTabs();
+
+    // PH1-05: persisted terminal font (empty family = widget default).
+    const QString fontFamily = Config::instance()
+                                   .value(QStringLiteral("terminal/fontFamily"))
+                                   .toString();
+    if (!fontFamily.isEmpty()) {
+        QFont font(fontFamily);
+        font.setPointSize(Config::instance()
+                              .value(QStringLiteral("terminal/fontSize"), 10)
+                              .toInt());
+        m_terminalFont = font;
+    }
 
     // Persisted preference: start the local agent API with the GUI so
     // external tools can drive open terminal tabs without a manual step.
@@ -146,6 +175,7 @@ void MainWindow::setupMenuBar()
     m_recentMenu = fileMenu->addMenu(tr("Recent Sessions"));
     fileMenu->addSeparator();
     fileMenu->addAction(tr("&Import Sessions..."), this, &MainWindow::onImportSessions);
+    fileMenu->addAction(tr("Import Open&SSH config..."), this, &MainWindow::onImportSshConfig);
     fileMenu->addAction(tr("&Export Sessions..."), this, &MainWindow::onExportSessions);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("E&xit"), QKeySequence::Quit, this, &QWidget::close);
@@ -155,6 +185,7 @@ void MainWindow::setupMenuBar()
     viewMenu->addAction(m_sessionDock->toggleViewAction());
     viewMenu->addAction(m_fileDock->toggleViewAction());
     viewMenu->addAction(m_transfersDock->toggleViewAction());
+    viewMenu->addAction(m_outlineDock->toggleViewAction());
     viewMenu->addSeparator();
     viewMenu->addAction(tr("Full Screen"), QKeySequence::FullScreen, this, [this]() {
         isFullScreen() ? showNormal() : showFullScreen();
@@ -171,8 +202,20 @@ void MainWindow::setupMenuBar()
     QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
     toolsMenu->addAction(tr("&Port Forwarding..."), this, &MainWindow::onPortForwarding);
     toolsMenu->addAction(tr("Send Command to All Terminals..."), this, &MainWindow::onSendCommand);
+    toolsMenu->addAction(tr("&Appearance..."), this, [this]() {
+        AppearanceDialog dialog(this);
+        dialog.exec();
+    });
     toolsMenu->addAction(tr("&Settings..."), this, &MainWindow::onOpenSettings);
-    toolsMenu->addAction(tr("&Key Manager"));
+    toolsMenu->addAction(tr("&Key Manager..."), this, [this]() {
+        KeyManagerDialog dialog(this);
+        dialog.exec();
+    });
+    // PH2-15: browse the automatic per-tab session logs.
+    toolsMenu->addAction(tr("Session &Log Viewer..."), this, [this]() {
+        SessionLogViewer viewer(this);
+        viewer.exec();
+    });
     toolsMenu->addSeparator();
     toolsMenu->addAction(tr("Set Lock Password..."), this, &MainWindow::onSetLockPassword);
     toolsMenu->addAction(tr("Lock Screen"), QKeySequence(tr("Ctrl+Alt+L")), this, &MainWindow::onLockScreen);
@@ -224,6 +267,48 @@ void MainWindow::setupToolBar()
     toolBar->addAction(tr("Disconnect"), this, &MainWindow::onDisconnect);
     toolBar->addSeparator();
 
+    // PH2-08: Free Type — keyboard input goes to every other SSH tab.
+    m_freeTypeAction = toolBar->addAction(tr("Free Type"), this, [this](bool on) {
+        if (on) {
+            int targets = 0;
+            for (int i = 0; i < m_tabWidget->count(); ++i) {
+                if (auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(i));
+                    tab && tab->sshSession()) {
+                    ++targets;
+                }
+            }
+            if (targets > 0
+                && QMessageBox::question(
+                       this, tr("Free Type Mode"),
+                       tr("Keyboard input will be sent to %1 other SSH tab(s) at the same "
+                          "time.\nBeware of vim, sudo and password prompts in mirrored "
+                          "tabs. Continue?")
+                           .arg(targets),
+                       QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes)
+                       != QMessageBox::Yes) {
+                const QSignalBlocker block(m_freeTypeAction);
+                m_freeTypeAction->setChecked(false);
+                return;
+            }
+        }
+        m_freeTypeMode = on;
+        statusBar()->showMessage(on ? tr("Free Type ON — input is mirrored to every other SSH tab")
+                                    : tr("Free Type OFF"),
+                                 on ? 0 : 3000);
+    });
+    m_freeTypeAction->setCheckable(true);
+    toolBar->addSeparator();
+
+    // PH1-06: quick connect — "user@host[:port]" (or bare "host") + Enter
+    // opens an ad-hoc SSH tab; the password is prompted locally.
+    m_quickConnectEdit = new QLineEdit(this);
+    m_quickConnectEdit->setPlaceholderText(tr("Quick connect: user@host[:port]"));
+    m_quickConnectEdit->setMinimumWidth(240);
+    m_quickConnectEdit->setClearButtonEnabled(true);
+    connect(m_quickConnectEdit, &QLineEdit::returnPressed, this, &MainWindow::onQuickConnect);
+    toolBar->addWidget(m_quickConnectEdit);
+    toolBar->addSeparator();
+
     auto *localButton = new QToolButton(this);
     localButton->setText(tr("Local"));
     localButton->setPopupMode(QToolButton::InstantPopup);
@@ -272,6 +357,22 @@ void MainWindow::setupDockWidgets()
             onRemoveFolder(index);
         }
     });
+    connect(m_sessionManager, &SessionManagerWidget::duplicateRequested, this, [this](const QModelIndex &index) {
+        if (m_sessionModel->nodeType(index) == SessionModel::NodeType::Session) {
+            onDuplicateSession(index);
+        }
+    });
+    // PH2-15: favorite pinning / tag editing.
+    connect(m_sessionManager, &SessionManagerWidget::favoriteToggleRequested, this, [this](const QModelIndex &index) {
+        if (m_sessionModel->nodeType(index) == SessionModel::NodeType::Session) {
+            onToggleFavorite(index);
+        }
+    });
+    connect(m_sessionManager, &SessionManagerWidget::tagsEditRequested, this, [this](const QModelIndex &index) {
+        if (m_sessionModel->nodeType(index) == SessionModel::NodeType::Session) {
+            onEditTags(index);
+        }
+    });
 
     m_sessionDock = new QDockWidget(tr("Session Manager"), this);
     m_sessionDock->setObjectName(QStringLiteral("sessionDock"));
@@ -292,9 +393,22 @@ void MainWindow::setupDockWidgets()
     m_transfers = new TransfersWidget(this);
     m_transfersDock = new QDockWidget(tr("Transfers"), this);
     m_transfersDock->setObjectName(QStringLiteral("transfersDock"));
-    m_transfersDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
+    m_transfers->setParent(m_transfersDock);
     m_transfersDock->setWidget(m_transfers);
     addDockWidget(Qt::BottomDockWidgetArea, m_transfersDock);
+
+    // PH2-02: terminal outline (prompts / build steps / log headers).
+    m_outlineDock = new QDockWidget(tr("Outline"), this);
+    m_outlineDock->setObjectName(QStringLiteral("outlineDock"));
+    auto *outline = new TerminalOutlineWidget(m_outlineDock);
+    outline->setTerminalProvider([this]() -> TerminalWidget * {
+        auto *tab = qobject_cast<SessionTab *>(m_tabWidget->currentWidget());
+        return tab && tab->terminalSession() ? tab->terminalSession()->terminalWidget()
+                                             : nullptr;
+    });
+    m_outlineDock->setWidget(outline);
+    addDockWidget(Qt::RightDockWidgetArea, m_outlineDock);
+    m_outlineDock->hide();
 }
 
 void MainWindow::setupCentralWidget()
@@ -309,17 +423,47 @@ void MainWindow::setupCentralWidget()
     m_tabWidget->setMovable(true);
     m_tabWidget->setDocumentMode(true);
 
+    // PH1-08: per-tab context menu (rename / color / pin / clone / sync).
+    m_tabWidget->tabBar()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_tabWidget->tabBar(), &QWidget::customContextMenuRequested,
+            this, &MainWindow::onTabContextMenu);
+    // PH1-08: dragging a tab out of the bar detaches it into its own window.
+    m_tabWidget->tabBar()->installEventFilter(this);
+
+    // PH1-08: Ctrl+1..9 jumps to the n-th tab.
+    for (int i = 1; i <= 9; ++i) {
+        auto *shortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+%1").arg(i)), this);
+        connect(shortcut, &QShortcut::activated, this, [this, i]() {
+            if (i - 1 < m_tabWidget->count()) {
+                m_tabWidget->setCurrentIndex(i - 1);
+            }
+        });
+    }
+
+    // PH2-07: command palette.
+    auto *paletteShortcut = new QShortcut(QKeySequence(tr("Ctrl+Shift+P")), this);
+    connect(paletteShortcut, &QShortcut::activated, this, &MainWindow::showCommandPalette);
+
     connect(m_tabWidget, &QTabWidget::tabCloseRequested, this, [this](int index) {
         QWidget *widget = m_tabWidget->widget(index);
-        if (auto *tab = qobject_cast<SessionTab *>(widget)) {
+        auto *tab = qobject_cast<SessionTab *>(widget);
+        if (tab) {
+            // PH1-08: pinned tabs refuse close requests (unpin first).
+            if (tab->property("pinned").toBool()) {
+                statusBar()->showMessage(
+                    tr("Tab '%1' is pinned — unpin it before closing.")
+                        .arg(m_tabWidget->tabText(index)), 4000);
+                return;
+            }
             tab->disconnectSession();
         }
         m_tabWidget->removeTab(index);
         // removeTab only detaches the widget; delete it so the shell process
         // object (and its ConPTY/session resources) is actually destroyed.
         if (widget) {
-            if (auto *tabWidget = qobject_cast<SessionTab *>(widget)) {
-                InputBroadcaster::instance().unregisterTab(tabWidget);
+            if (tab) {
+                InputBroadcaster::instance().unregisterTab(tab);
+                m_syncInputTabs.removeAll(tab);
             }
             widget->deleteLater();
         }
@@ -407,15 +551,36 @@ void MainWindow::onNewSession()
 void MainWindow::onNewLocalTerminal(const QString &shellType)
 {
     auto *tab = SessionTab::createLocal(shellType, this);
-    connect(tab, &SessionTab::sizeChanged, this, [this, tab](int columns, int rows) {
-        if (m_tabWidget->currentWidget() == tab) {
-            m_termSizeLabel->setText(tr("%1×%2").arg(columns).arg(rows));
-        }
-    });
+    wireSessionTab(tab);
     const QString title = tab->config().displayName();
     const int index = m_tabWidget->addTab(tab, title);
     m_tabWidget->setCurrentIndex(index);
     InputBroadcaster::instance().registerTab(tab);
+}
+
+void MainWindow::onImportSshConfig()
+{
+    ImportSshConfigDialog dialog(this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const QList<SessionConfig> configs = dialog.selectedConfigs();
+    if (configs.isEmpty()) {
+        return;
+    }
+    int imported = 0;
+    for (const SessionConfig &config : configs) {
+        if (!m_sessionRepository->saveSession(config)) {
+            QMessageBox::warning(this, tr("Error"),
+                                 tr("Failed to save session '%1': %2")
+                                     .arg(config.displayName(),
+                                          m_sessionRepository->lastError()));
+            continue;
+        }
+        m_sessionModel->addSession(config);
+        ++imported;
+    }
+    statusBar()->showMessage(tr("Imported %1 session(s) from ssh config").arg(imported), 5000);
 }
 
 void MainWindow::onEditSession(const QModelIndex &index)
@@ -442,9 +607,488 @@ void MainWindow::onEditSession(const QModelIndex &index)
     m_sessionModel->setSessionConfig(index, config);
 }
 
-void MainWindow::onRemoveSession(const QModelIndex &index)
+void MainWindow::onDuplicateSession(const QModelIndex &index)
 {
     if (!index.isValid()) {
+        return;
+    }
+
+    const SessionConfig source = m_sessionModel->sessionConfig(index);
+    // Full-field copy (credentials, key paths, keepalive, ...), but with a
+    // FRESH id: saveSession is INSERT OR REPLACE, so keeping the source id
+    // would silently overwrite the original.
+    QVariantMap map = source.toMap();
+    map[QStringLiteral("id")] = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    SessionConfig copy = SessionConfig::fromMap(map);
+    copy.setName(source.name() + QStringLiteral("-copy"));
+
+    NewSessionDialog dialog(this);
+    dialog.setSessionConfig(copy);
+    dialog.setWindowTitle(tr("Duplicate Session"));
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    copy = dialog.sessionConfig();
+    if (!m_sessionRepository->saveSession(copy)) {
+        QMessageBox::warning(this, tr("Error"),
+                             tr("Failed to save session: %1").arg(m_sessionRepository->lastError()));
+        return;
+    }
+    // Insert next to the source so the copy is visible immediately.
+    m_sessionModel->addSession(copy, index.parent());
+}
+
+// PH2-15: pin/unpin a session. Full reload instead of setSessionConfig
+// because the favorite flag moves the row through the proxy's sort order
+// (folders → favorites → alphabetical) and loadSessions keeps the model and
+// the database in one step.
+void MainWindow::onToggleFavorite(const QModelIndex &index)
+{
+    if (!index.isValid()) {
+        return;
+    }
+
+    SessionConfig config = m_sessionModel->sessionConfig(index);
+    config.setFavorite(!config.favorite());
+    if (!m_sessionRepository->saveSession(config)) {
+        QMessageBox::warning(this, tr("Error"),
+                             tr("Failed to save session: %1").arg(m_sessionRepository->lastError()));
+        return;
+    }
+    loadSessions();
+}
+
+// PH2-15: edit the free-form tags (comma separated, searchable via the
+// quick filter).
+void MainWindow::onEditTags(const QModelIndex &index)
+{
+    if (!index.isValid()) {
+        return;
+    }
+
+    const SessionConfig config = m_sessionModel->sessionConfig(index);
+    bool ok = false;
+    const QString text = QInputDialog::getText(
+        this, tr("Edit Tags"), tr("Tags for '%1' (comma separated):").arg(config.displayName()),
+        QLineEdit::Normal, config.tags().join(QStringLiteral(", ")), &ok);
+    if (!ok) {
+        return;
+    }
+
+    QStringList tags;
+    for (QString tag : text.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        tag = tag.trimmed();
+        if (!tag.isEmpty() && !tags.contains(tag, Qt::CaseInsensitive)) {
+            tags.append(tag);
+        }
+    }
+    tags.sort(Qt::CaseInsensitive);
+
+    if (tags == config.tags()) {
+        return;
+    }
+
+    SessionConfig updated = config;
+    updated.setTags(tags);
+    if (!m_sessionRepository->saveSession(updated)) {
+        QMessageBox::warning(this, tr("Error"),
+                             tr("Failed to save session: %1").arg(m_sessionRepository->lastError()));
+        return;
+    }
+    loadSessions();
+    statusBar()->showMessage(tr("Tags updated for '%1'").arg(updated.displayName()), 3000);
+}
+
+// PH1-06: "user@host[:port]", "host:port", "user@host" or bare "host".
+void MainWindow::onQuickConnect()
+{
+    const QString text = m_quickConnectEdit->text().trimmed();
+    if (text.isEmpty()) {
+        return;
+    }
+    QString user;
+    QString host = text;
+    QString portStr;
+    const int at = text.indexOf(QLatin1Char('@'));
+    if (at > 0) {
+        user = text.left(at);
+        host = text.mid(at + 1);
+    }
+    const int colon = host.lastIndexOf(QLatin1Char(':'));
+    if (colon > 0) {
+        // IPv6 literals are not supported by the quick bar (use a session).
+        const QString maybePort = host.mid(colon + 1);
+        bool ok = false;
+        const int port = maybePort.toInt(&ok);
+        if (ok && port > 0 && port < 65536) {
+            portStr = maybePort;
+            host = host.left(colon);
+        }
+    }
+    if (host.isEmpty()) {
+        statusBar()->showMessage(tr("Quick connect: expected user@host[:port]"), 4000);
+        return;
+    }
+
+    SessionConfig config;
+    config.setHost(host);
+    config.setPort(portStr.isEmpty() ? 22 : portStr.toInt());
+    config.setUsername(user.isEmpty() ? QStringLiteral("root") : user);
+    config.setAuthMethod(AuthMethod::Password);
+    // Local password prompt (no echo); empty input is accepted for
+    // key-based/agent setups where the password is simply not needed.
+    bool ok = false;
+    const QString password = QInputDialog::getText(
+        this, tr("Quick Connect"),
+        tr("Password for %1@%2:%3 (leave empty for key auth):")
+            .arg(config.username(), host).arg(config.port()),
+        QLineEdit::Password, QString(), &ok);
+    if (!ok) {
+        return; // cancelled
+    }
+    if (!password.isEmpty()) {
+        config.setPassword(SecureString(password));
+    }
+
+    const int index = openSshTab(config);
+    if (index < 0) {
+        statusBar()->showMessage(tr("Quick connect: invalid target"), 4000);
+        return;
+    }
+    m_quickConnectEdit->clear();
+    statusBar()->showMessage(tr("Connecting to %1@%2:%3 ...")
+                                 .arg(config.username(), host).arg(config.port()), 4000);
+}
+
+// PH1-08: rename (local alias), color, pin, clone, sync-input, close-others.
+void MainWindow::onTabContextMenu(const QPoint &pos)
+{
+    const int index = m_tabWidget->tabBar()->tabAt(pos);
+    if (index < 0) {
+        return;
+    }
+    auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(index));
+    if (!tab) {
+        return;
+    }
+    m_tabWidget->setCurrentIndex(index);
+
+    QMenu menu(this);
+    menu.addAction(tr("Rename"), this, [this, index]() {
+        bool ok = false;
+        const QString name = QInputDialog::getText(
+            this, tr("Rename Tab"), tr("Tab title:"),
+            QLineEdit::Normal, m_tabWidget->tabText(index), &ok);
+        if (ok && !name.trimmed().isEmpty()) {
+            m_tabWidget->setTabText(index, name.trimmed());
+        }
+    });
+    // PH1-08: detach into a floating window (drag-out does the same).
+    menu.addAction(tr("Detach to Window"), this, [this, index]() {
+        detachTab(index);
+    });
+    menu.addAction(tr("Color"), this, [this, index]() {
+        // Compact preset palette keeps tab colors meaningful as groups.
+        static const QList<QColor> palette = {
+            QColor(0xe7, 0x48, 0x49), QColor(0xf7, 0x6b, 0x1c), QColor(0xff, 0xc9, 0x00),
+            QColor(0x13, 0xbb, 0x70), QColor(0x00, 0xa4, 0xef), QColor(0x8e, 0x8c, 0xd8),
+            QColor(0xb1, 0x46, 0xc1), QColor(0x60, 0x60, 0x60),
+        };
+        QWidget *tabWidget = m_tabWidget->widget(index);
+        QColor current = tabWidget->property("tabColor").value<QColor>();
+        // Simple grid dialog built from QColorDialog with a preset is not
+        // portable; use a small inline picker.
+        QMenu picker(this);
+        QAction *none = picker.addAction(tr("No color"));
+        for (const QColor &c : palette) {
+            QAction *a = picker.addAction(picker.style()->standardIcon(QStyle::SP_ArrowRight),
+                                          QString());
+            a->setIcon(colorSwatchIcon(c));
+        }
+        QAction *chosen = picker.exec(QCursor::pos());
+        if (!chosen) {
+            return;
+        }
+        if (chosen == none) {
+            applyTabColor(index, QColor());
+        } else {
+            applyTabColor(index, palette.at(picker.actions().indexOf(chosen) - 1));
+        }
+    });
+    const bool pinned = tab->property("pinned").toBool();
+    menu.addAction(tr(pinned ? "Unpin" : "Pin"), this, [this, index, pinned]() {
+        setTabPinned(index, !pinned);
+    });
+    menu.addAction(tr("Clone Tab"), this, [this, tab]() {
+        // Same config, fresh tab (ad-hoc copies do not touch the repository).
+        const int i = openSshTab(tab->config());
+        if (i >= 0) {
+            m_tabWidget->setCurrentIndex(i);
+        }
+    });
+    menu.addAction(tr("ZMODEM Send File..."), this, [this, tab]() {
+        const QString path = QFileDialog::getOpenFileName(this, tr("Send via ZMODEM"));
+        if (!path.isEmpty()) {
+            if (!tab->zmodemSendFile(path)) {
+                statusBar()->showMessage(
+                    tr("Cannot start ZMODEM send (a transfer is active, or the "
+                       "file is unreadable/empty)"), 5000);
+            }
+        }
+    });
+    // PH2-15: open this tab's own log file (preselected in the viewer).
+    if (tab->terminalSession() && !tab->terminalSession()->logFilePath().isEmpty()) {
+        menu.addAction(tr("View Session Log..."), this, [this, tab]() {
+            SessionLogViewer viewer(this);
+            viewer.selectFile(tab->terminalSession()->logFilePath());
+            viewer.exec();
+        });
+    }
+    menu.addSeparator();
+    QAction *sync = menu.addAction(tr("Sync Input"), this, [this, tab](bool checked) {
+        if (checked) {
+            if (!m_syncInputTabs.contains(tab)) {
+                m_syncInputTabs.append(tab);
+            }
+        } else {
+            m_syncInputTabs.removeAll(tab);
+        }
+        statusBar()->showMessage(
+            checked ? tr("Sync input ON for '%1' — typing is mirrored to %2 other tab(s)")
+                          .arg(tab->config().displayName())
+                          .arg(m_syncInputTabs.count() - 1)
+                    : tr("Sync input OFF for '%1'").arg(tab->config().displayName()),
+            4000);
+    });
+    sync->setCheckable(true);
+    sync->setChecked(m_syncInputTabs.contains(tab));
+    sync->setEnabled(m_tabWidget->count() > 1 || m_syncInputTabs.size() > 1);
+    menu.addSeparator();
+    menu.addAction(tr("Close Other Tabs"), this, [this, index]() {
+        // Close from the end so indices stay valid.
+        for (int i = m_tabWidget->count() - 1; i >= 0; --i) {
+            if (i == index) {
+                continue;
+            }
+            auto *other = qobject_cast<SessionTab *>(m_tabWidget->widget(i));
+            if (other && other->property("pinned").toBool()) {
+                continue; // pinned tabs refuse close
+            }
+            closeTab(i);
+        }
+    });
+    menu.exec(m_tabWidget->tabBar()->mapToGlobal(pos));
+}
+
+void MainWindow::applyTabColor(int index, const QColor &color)
+{
+    QWidget *widget = m_tabWidget->widget(index);
+    if (!widget) {
+        return;
+    }
+    if (color.isValid()) {
+        widget->setProperty("tabColor", color);
+        m_tabWidget->setTabIcon(index, colorSwatchIcon(color));
+    } else {
+        widget->setProperty("tabColor", QVariant());
+        m_tabWidget->setTabIcon(index, QIcon());
+    }
+}
+
+void MainWindow::setTabPinned(int index, bool pinned)
+{
+    QWidget *widget = m_tabWidget->widget(index);
+    if (!widget) {
+        return;
+    }
+    widget->setProperty("pinned", pinned);
+    if (pinned) {
+        // Pinned tabs live at the front, in pin order.
+        m_tabWidget->tabBar()->moveTab(index, 0);
+        statusBar()->showMessage(
+            tr("Pinned '%1' (protected from close)").arg(m_tabWidget->tabText(0)), 4000);
+    }
+}
+
+// PH1-08: tab detach. Dragging a tab more than ~12px outside the tab bar
+// aborts the built-in reorder and moves the tab into a FloatingTabWindow.
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_tabWidget->tabBar()) {
+        const QEvent::Type type = event->type();
+        if (type == QEvent::MouseButtonPress) {
+            auto *me = static_cast<QMouseEvent *>(event);
+            m_barPressedIndex = (me->button() == Qt::LeftButton)
+                                    ? m_tabWidget->tabBar()->tabAt(me->pos())
+                                    : -1;
+        } else if (type == QEvent::MouseButtonRelease) {
+            m_barPressedIndex = -1;
+        } else if (type == QEvent::MouseMove && m_barPressedIndex >= 0) {
+            auto *me = static_cast<QMouseEvent *>(event);
+            if (me->buttons() & Qt::LeftButton) {
+                const QRect escapeZone = m_tabWidget->tabBar()->rect().adjusted(-12, -12, 12, 12);
+                if (!escapeZone.contains(me->pos())) {
+                    const int index = m_barPressedIndex;
+                    m_barPressedIndex = -1;
+                    // End the internal reorder drag before removing the tab.
+                    QMouseEvent release(QEvent::MouseButtonRelease, me->position(),
+                                        me->globalPosition(), Qt::LeftButton, Qt::NoButton,
+                                        me->modifiers());
+                    QCoreApplication::sendEvent(watched, &release);
+                    detachTab(index);
+                    return true;
+                }
+            }
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::detachTab(int index)
+{
+    if (index < 0 || index >= m_tabWidget->count()) {
+        return;
+    }
+    auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(index));
+    if (!tab) {
+        return; // the welcome placeholder is not detachable
+    }
+    if (tab->property("pinned").toBool()) {
+        statusBar()->showMessage(
+            tr("Tab '%1' is pinned — unpin it before detaching.")
+                .arg(m_tabWidget->tabText(index)), 4000);
+        return;
+    }
+    const QString title = m_tabWidget->tabText(index);
+    const QIcon icon = m_tabWidget->tabIcon(index);
+    m_tabWidget->removeTab(index);
+
+    auto *window = new FloatingTabWindow(tab, title, icon);
+    connect(window, &FloatingTabWindow::dockRequested, this,
+            &MainWindow::dockFloatingTab);
+    connect(window, &FloatingTabWindow::closeRequested, this,
+            &MainWindow::closeFloatingTab);
+    m_floatingTabs.append(window);
+    window->move(QCursor::pos() - QPoint(window->width() / 2, 16));
+    window->show();
+    statusBar()->showMessage(tr("'%1' detached to its own window").arg(title), 4000);
+    updateStatusBarInfo();
+}
+
+void MainWindow::dockFloatingTab(FloatingTabWindow *window)
+{
+    if (!window) {
+        return;
+    }
+    SessionTab *tab = window->tab();
+    if (!tab) {
+        window->deleteLater();
+        return;
+    }
+    const bool pinned = tab->property("pinned").toBool();
+    const QIcon icon = window->tabIcon();
+    const QString title = window->tabTitle();
+    window->takeCentralWidget(); // ownership of the tab back to us
+    m_floatingTabs.removeAll(window);
+    window->deleteLater();
+
+    const int index = m_tabWidget->addTab(tab, title);
+    if (!icon.isNull()) {
+        m_tabWidget->setTabIcon(index, icon);
+    }
+    if (pinned) {
+        setTabPinned(index, true);
+    }
+    m_tabWidget->setCurrentIndex(m_tabWidget->indexOf(tab));
+    statusBar()->showMessage(tr("'%1' docked back").arg(title), 4000);
+    updateStatusBarInfo();
+}
+
+void MainWindow::closeFloatingTab(FloatingTabWindow *window)
+{
+    if (!window) {
+        return;
+    }
+    SessionTab *tab = window->tab();
+    m_floatingTabs.removeAll(window);
+    window->takeCentralWidget(); // keep deleteLater from destroying the tab
+    window->deleteLater();
+    if (tab) {
+        tab->disconnectSession();
+        InputBroadcaster::instance().unregisterTab(tab);
+        m_syncInputTabs.removeAll(tab);
+        tab->deleteLater();
+    }
+    updateStatusBarInfo();
+}
+
+// PH2-08: keyboard input typed in a sync-group tab is mirrored verbatim to
+// the other members. Mirrored input re-enters through the API path, which
+// does not re-emit inputTyped — no feedback loop.
+void MainWindow::routeSyncInput(SessionTab *source, const QByteArray &data)
+{
+    QList<SessionTab *> targets;
+    if (m_freeTypeMode) {
+        // Free Type: every other SSH tab mirrors the input.
+        for (int i = 0; i < m_tabWidget->count(); ++i) {
+            if (auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(i));
+                tab && tab != source && tab->sshSession()) {
+                targets.append(tab);
+            }
+        }
+    } else if (m_syncInputTabs.contains(source)) {
+        for (QPointer<SessionTab> tab : std::as_const(m_syncInputTabs)) {
+            if (tab && tab != source) {
+                targets.append(tab);
+            }
+        }
+    }
+    if (!targets.isEmpty()) {
+        InputBroadcaster::instance().broadcast(targets, QString::fromUtf8(data), false);
+    }
+}
+
+// Shared wiring for every SessionTab, wherever it is created from.
+void MainWindow::wireSessionTab(SessionTab *tab)
+{
+    connect(tab, &SessionTab::sizeChanged, this, [this, tab](int columns, int rows) {
+        if (m_tabWidget->currentWidget() == tab) {
+            m_termSizeLabel->setText(tr("%1×%2").arg(columns).arg(rows));
+        }
+    });
+    connect(tab, &SessionTab::inputTyped, this, [this, tab](const QByteArray &data) {
+        routeSyncInput(tab, data);
+    });
+    // PH1-05: honor the persisted terminal font.
+    if (m_terminalFont.has_value()) {
+        tab->setTerminalFont(*m_terminalFont);
+    }
+}
+
+void MainWindow::applyTerminalFont(const QFont &font)
+{
+    m_terminalFont = font;
+    for (int i = 0; i < m_tabWidget->count(); ++i) {
+        if (auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(i))) {
+            tab->setTerminalFont(font);
+        }
+    }
+}
+
+QIcon MainWindow::colorSwatchIcon(const QColor &color)
+{
+    QPixmap pm(16, 16);
+    pm.fill(Qt::transparent);
+    QPainter painter(&pm);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setBrush(color);
+    painter.setPen(Qt::NoPen);
+    painter.drawRoundedRect(2, 6, 12, 5, 2, 2);
+    return QIcon(pm);
+}
+
+void MainWindow::onRemoveSession(const QModelIndex &index)
+{    if (!index.isValid()) {
         return;
     }
 
@@ -537,11 +1181,7 @@ void MainWindow::onSessionActivated(const SessionConfig &config)
     updateRecentMenu();
 
     auto *tab = new SessionTab(config, this);
-    connect(tab, &SessionTab::sizeChanged, this, [this, tab](int columns, int rows) {
-        if (m_tabWidget->currentWidget() == tab) {
-            m_termSizeLabel->setText(tr("%1×%2").arg(columns).arg(rows));
-        }
-    });
+    wireSessionTab(tab);
     const int index = m_tabWidget->addTab(tab, config.displayName());
     m_tabWidget->setCurrentIndex(index);
     InputBroadcaster::instance().registerTab(tab);
@@ -555,20 +1195,17 @@ int MainWindow::openSshTab(const SessionConfig &config)
         return -1;
     }
     auto *tab = new SessionTab(config, this);
-    connect(tab, &SessionTab::sizeChanged, this, [this, tab](int columns, int rows) {
-        if (m_tabWidget->currentWidget() == tab) {
-            m_termSizeLabel->setText(tr("%1×%2").arg(columns).arg(rows));
-        }
-    });
+    wireSessionTab(tab);
     const int index = m_tabWidget->addTab(tab, config.displayName());
     m_tabWidget->setCurrentIndex(index);
     InputBroadcaster::instance().registerTab(tab);
     return index;
 }
 
-void MainWindow::startAgent()
+void MainWindow::startAgent(int port)
 {
     if (!m_agentServer) {
+        m_agentPort = port;
         onToggleAgent();
     }
 }
@@ -713,7 +1350,9 @@ void MainWindow::onToggleAgent()
                     tr("Agent accept error on %1: %2").arg(m_agentServer->url(), message),
                     15000);
             });
-    if (!m_agentServer->start()) {
+    if (!m_agentServer->start(m_agentPort)) {
+        qWarning("agent start failed on port %d: %s",
+                 m_agentPort, qPrintable(m_agentServer->errorString()));
         QMessageBox::warning(this, tr("Agent"),
                              tr("Failed to start agent: %1\n\n"
                                 "Another hssh instance (or MCP auto-launched GUI) may already "
@@ -725,6 +1364,7 @@ void MainWindow::onToggleAgent()
         return;
     }
     m_agentAction->setText(tr("Stop Agent"));
+    qInfo("agent listening on port %d", m_agentPort);
     statusBar()->showMessage(tr("Agent listening on %1").arg(m_agentServer->url()), 5000);
 }
 
@@ -847,6 +1487,18 @@ bool MainWindow::sendInputToTab(int index, const QString &data)
     // Raw input: no appended Enter, control bytes go through as-is.
     tab->runCommand(data);
     return true;
+}
+
+bool MainWindow::zmodemSendToTab(int index, const QString &localPath)
+{
+    if (index < 0 || index >= m_tabWidget->count()) {
+        return false;
+    }
+    auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(index));
+    if (!tab) {
+        return false;
+    }
+    return tab->zmodemSendFile(localPath);
 }
 
 bool MainWindow::readTab(int index, int maxLines, QString *text) const
@@ -998,6 +1650,122 @@ bool MainWindow::waitForPromptPattern(SessionTab *tab, const QStringList &patter
     return false;
 }
 
+void MainWindow::sudoAsync(int index, const QString &command, const QString &secret,
+                           bool useStoredCredential, int timeoutMs,
+                           const AgentTabsInterface::SudoAsyncCallback &cb)
+{
+    using Result = AgentTabsInterface::SudoAsyncResult;
+
+    // Synchronously decidable gates first (no dialog needed).
+    auto *tab = (index >= 0 && index < m_tabWidget->count())
+        ? qobject_cast<SessionTab *>(m_tabWidget->widget(index)) : nullptr;
+    if (!tab) {
+        cb(Result{false, QStringLiteral("unknown_tab"), false, QString(), false, -1, QString()});
+        return;
+    }
+    const bool alreadyApproved = m_sudoApproved.contains(tab);
+    const QString identity = AgentSudoAuth::identityFor(tab->config());
+    const bool alwaysAllowed = !identity.isEmpty() && AgentSudoAuth::isAlwaysAllowed(identity);
+
+    const auto runExecution = [this, tab, index, command, secret, useStoredCredential,
+                               timeoutMs, cb, identity]() {
+        QString output;
+        QString errorMessage;
+        bool timedOut = false;
+        int exitCode = -1;
+        const bool ok = sudoExec(index, command, secret, useStoredCredential, timeoutMs,
+                                 &output, &timedOut, &exitCode, &errorMessage);
+        Result r;
+        r.confirmed = true;
+        r.ran = ok;
+        r.output = output;
+        r.timedOut = timedOut;
+        r.exitCode = exitCode;
+        r.errorMessage = errorMessage;
+        cb(r);
+    };
+
+    if (alreadyApproved || alwaysAllowed) {
+        runExecution();
+        return;
+    }
+
+    // Dialog WITHOUT a nested event loop: show() + finished signal + 30 s
+    // auto-reject timer. The agent stays fully responsive while it is up.
+    if (isMinimized()) {
+        showNormal();
+    }
+    raise();
+    activateWindow();
+    QApplication::alert(this);
+
+    auto *box = new QMessageBox(this);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->setWindowTitle(tr("Sudo Confirmation"));
+    box->setIcon(QMessageBox::Warning);
+    box->setText(tr("An AI agent requests to run this command with sudo in session \"%1\":")
+                     .arg(m_tabWidget->tabText(index)));
+    box->setInformativeText(tr("Allow it? \"Always Allow\" grants sudo for this machine "
+                                "permanently; plain approval lasts while this tab stays open. "
+                                "This dialog closes automatically in 30 seconds."));
+    box->setDetailedText(command);
+    QPushButton *yesButton = box->addButton(QMessageBox::Yes);
+    box->addButton(QMessageBox::No);
+    QAbstractButton *alwaysButton = nullptr;
+    if (!identity.isEmpty()) {
+        alwaysButton = box->addButton(tr("Always Allow"), QMessageBox::AcceptRole);
+    }
+    box->setDefaultButton(QMessageBox::No);
+    box->setWindowFlags(box->windowFlags() | Qt::WindowStaysOnTopHint);
+
+    AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("sudo_confirm"),
+                    QStringLiteral("tab=%1 identity=%2").arg(index).arg(identity),
+                    QStringLiteral("dialog shown"));
+
+    QPointer<QMessageBox> guard(box);
+    QPointer<SessionTab> tabGuard(tab);
+    auto *autoReject = new QTimer(box);
+    autoReject->setSingleShot(true);
+    connect(autoReject, &QTimer::timeout, box, [guard]() {
+        if (guard) {
+            guard->setProperty("hsshTimedOut", true);
+            guard->reject();
+        }
+    });
+    connect(box, &QMessageBox::finished, this,
+            [this, guard, tabGuard, yesButton, alwaysButton, identity, index,
+             runExecution, cb](int) {
+        if (!guard) {
+            return;
+        }
+        QAbstractButton *clicked = guard->clickedButton();
+        const bool timedOutDialog = guard->property("hsshTimedOut").toBool();
+        if (clicked != yesButton && clicked != alwaysButton) {
+            const QString code = timedOutDialog ? QStringLiteral("timeout")
+                                                : QStringLiteral("user_rejected");
+            AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("sudo_confirm"),
+                            QStringLiteral("tab=%1 identity=%2").arg(index).arg(identity),
+                            timedOutDialog ? QStringLiteral("auto-rejected: no answer within 30 s")
+                                           : QStringLiteral("rejected by user"));
+            cb(Result{false, code, false, QString(), false, -1, QString()});
+            return;
+        }
+        if (clicked == alwaysButton) {
+            AgentSudoAuth::setAlwaysAllowed(identity);
+        }
+        AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("sudo_confirm"),
+                        QStringLiteral("tab=%1 identity=%2").arg(index).arg(identity),
+                        clicked == alwaysButton ? QStringLiteral("approved (always)")
+                                                : QStringLiteral("approved"));
+        if (tabGuard) {
+            m_sudoApproved.append(tabGuard);
+        }
+        runExecution();
+    });
+    autoReject->start(30000);
+    box->show();
+}
+
 bool MainWindow::sudoExec(int index, const QString &command, const QString &secret,
                           bool useStoredCredential, int timeoutMs,
                           QString *output, bool *timedOut, int *exitCode,
@@ -1099,6 +1867,80 @@ int MainWindow::openSessionTab(const QString &name)
     return -1;
 }
 
+// PH2-07: Ctrl+Shift+P palette over menu actions, saved sessions and tabs.
+void MainWindow::showCommandPalette()
+{
+    using PaletteItem = CommandPalette::Item;
+    QList<PaletteItem> items;
+
+    // Menu actions (recursive walk of the menu bar).
+    const auto walkMenu = [this, &items](const QMenu *menu, auto &&recurse) -> void {
+        for (QAction *action : menu->actions()) {
+            if (action->menu()) {
+                recurse(action->menu(), recurse);
+                continue;
+            }
+            if (action->isSeparator() || action->text().isEmpty()) {
+                continue;
+            }
+            PaletteItem item;
+            item.id = QStringLiteral("menu:") + action->text();
+            item.title = QString(action->text()).remove(QLatin1Char('&'));
+            item.category = tr("Command");
+            item.shortcut = action->shortcut().toString(QKeySequence::NativeText);
+            QAction *target = action;
+            item.action = [target]() { target->trigger(); };
+            items.append(item);
+        }
+    };
+    for (QAction *top : menuBar()->actions()) {
+        if (top->menu()) {
+            walkMenu(top->menu(), walkMenu);
+        }
+    }
+
+    // Saved sessions.
+    for (const SessionConfig &config : m_sessionRepository->loadAllSessions()) {
+        PaletteItem item;
+        item.id = QStringLiteral("session:") + config.id();
+        item.title = config.displayName();
+        item.category = tr("Session");
+        const QString host = QStringLiteral("%1@%2:%3")
+                                 .arg(config.username(), config.host())
+                                 .arg(config.port());
+        item.shortcut = host;
+        item.action = [this, config]() { onSessionActivated(config); };
+        items.append(item);
+    }
+
+    // Open tabs (jump).
+    for (int i = 0; i < m_tabWidget->count(); ++i) {
+        auto *tab = qobject_cast<SessionTab *>(m_tabWidget->widget(i));
+        if (!tab) {
+            continue;
+        }
+        PaletteItem item;
+        item.id = QStringLiteral("tab:") + QString::number(i);
+        item.title = m_tabWidget->tabText(i);
+        item.category = tr("Go to Tab");
+        item.action = [this, i]() {
+            if (i < m_tabWidget->count()) {
+                m_tabWidget->setCurrentIndex(i);
+            }
+        };
+        items.append(item);
+    }
+
+    CommandPalette palette(this);
+    palette.setItems(items);
+    // Center horizontally over the main window, near the top.
+    palette.adjustSize();
+    const QPoint topLeft(mapToGlobal(QPoint(width() / 2 - palette.width() / 2,
+                                             height() / 4)));
+    palette.move(topLeft);
+    palette.exec();
+}
+
 bool MainWindow::reconnectTab(int index)
 {
     if (index < 0 || index >= m_tabWidget->count()) {
@@ -1128,6 +1970,7 @@ bool MainWindow::closeTab(int index)
     tab->disconnectSession();
     m_tabWidget->removeTab(index);
     InputBroadcaster::instance().unregisterTab(tab);
+    m_syncInputTabs.removeAll(tab);
     tab->deleteLater();
     updateStatusBarInfo();
     return true;
@@ -1184,12 +2027,25 @@ QVariantList MainWindow::collectOpenTabs() const
             continue;
         }
         QVariantMap entry;
-        if (tab->config().sessionType() == SessionType::Ssh) {
-            entry[QStringLiteral("type")] = QStringLiteral("ssh");
+        if (tab->config().sessionType() == SessionType::Ssh
+            || tab->config().sessionType() == SessionType::Serial) {
+            entry[QStringLiteral("type")] =
+                tab->config().sessionType() == SessionType::Serial
+                    ? QStringLiteral("serial")
+                    : QStringLiteral("ssh");
             entry[QStringLiteral("id")] = tab->config().id();
         } else {
             entry[QStringLiteral("type")] = QStringLiteral("local");
             entry[QStringLiteral("shell")] = tab->config().shellType();
+        }
+        // PH1-08: alias / color / pin survive restarts.
+        entry[QStringLiteral("title")] = m_tabWidget->tabText(i);
+        if (tab->property("pinned").toBool()) {
+            entry[QStringLiteral("pinned")] = true;
+        }
+        const QColor color = tab->property("tabColor").value<QColor>();
+        if (color.isValid()) {
+            entry[QStringLiteral("color")] = color.name();
         }
         result.append(entry);
     }
@@ -1198,7 +2054,10 @@ QVariantList MainWindow::collectOpenTabs() const
 
 void MainWindow::restorePreviousTabs()
 {
-    if (!Config::instance().boolValue(QStringLiteral("session/restoreTabs"), true)) {
+    // Test instances (--no-restore) skip both the prompt and the restore —
+    // they must come up headless-dialog-free for automated smoke runs.
+    if (m_skipTabRestore
+        || !Config::instance().boolValue(QStringLiteral("session/restoreTabs"), true)) {
         return;
     }
     const QVariantList saved = Config::instance().value(QStringLiteral("ui/openTabs")).toList();
@@ -1223,13 +2082,31 @@ void MainWindow::restorePreviousTabs()
     for (const QVariant &entryVariant : saved) {
         const QVariantMap entry = entryVariant.toMap();
         const QString type = entry.value(QStringLiteral("type")).toString();
-        if (type == QLatin1String("ssh")) {
+        int index = -1;
+        if (type == QLatin1String("ssh") || type == QLatin1String("serial")) {
             const QString id = entry.value(QStringLiteral("id")).toString();
             if (byId.contains(id)) {
                 onSessionActivated(byId.value(id));
+                index = m_tabWidget->count() - 1;
             }
         } else if (type == QLatin1String("local")) {
             onNewLocalTerminal(entry.value(QStringLiteral("shell")).toString());
+            index = m_tabWidget->count() - 1;
+        }
+        if (index < 0) {
+            continue;
+        }
+        // PH1-08: restore alias / color / pin.
+        const QString title = entry.value(QStringLiteral("title")).toString();
+        if (!title.isEmpty()) {
+            m_tabWidget->setTabText(index, title);
+        }
+        const QString colorName = entry.value(QStringLiteral("color")).toString();
+        if (!colorName.isEmpty()) {
+            applyTabColor(index, QColor(colorName));
+        }
+        if (entry.value(QStringLiteral("pinned")).toBool()) {
+            setTabPinned(index, true);
         }
     }
 }

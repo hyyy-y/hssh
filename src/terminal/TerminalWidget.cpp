@@ -2,19 +2,26 @@
 
 #include <QClipboard>
 #include <QContextMenuEvent>
+#include <QDateTime>
+#include <QDesktopServices>
 #include <QFontDatabase>
+#include <QFontInfo>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
+#include <QRegularExpression>
 #include <QScrollBar>
 #include <QStyle>
 #include <QTimer>
 #include <QWheelEvent>
+
+#include "utils/Config.h"
 
 #include <optional>
 #include <vector>
@@ -26,6 +33,53 @@ constexpr int defaultColumns = 80;
 constexpr int defaultRows = 24;
 constexpr int outputBufferSize = 4096;
 constexpr int maxScrollbackLines = 10000;
+
+// True when every glyph of the font advances by the same amount, i.e. runs of
+// text may be painted as one string and still land on the cell grid.
+bool isFixedPitchFont(const QFont &font)
+{
+    if (QFontInfo(font).fixedPitch()) {
+        return true;
+    }
+    const QFontMetrics fm(font);
+    const int advanceM = fm.horizontalAdvance(QLatin1Char('M'));
+    return advanceM > 0 && fm.horizontalAdvance(QLatin1Char('i')) == advanceM
+           && fm.horizontalAdvance(QLatin1Char('W')) == advanceM
+           && fm.horizontalAdvance(QLatin1Char(' ')) == advanceM;
+}
+
+// Choose the terminal face once per process. Note that QFont::family() of a
+// default-constructed QFont is *not* empty 鈥?it resolves to the application
+// font (e.g. Microsoft YaHei UI) 鈥?so an isEmpty() fallback leaves that
+// proportional UI font in place and every glyph advance disagrees with the
+// cell grid. Pick by verifying the resolved face instead.
+const QFont &defaultTerminalFont()
+{
+    static const QFont font = [] {
+        const QStringList preferred = {
+            QStringLiteral("Cascadia Mono"), QStringLiteral("Cascadia Code"),
+            QStringLiteral("Consolas"), QStringLiteral("Courier New"),
+        };
+        const QStringList families = QFontDatabase::families();
+        for (const QString &family : preferred) {
+            if (families.contains(family) && isFixedPitchFont(QFont(family, 10))) {
+                return QFont(family, 10);
+            }
+        }
+        // Nothing from the short list: take the first fixed-pitch face the
+        // font database knows about (the system fixed font may be a poor
+        // terminal face, e.g. NSimSun on zh-CN Windows).
+        for (const QString &family : families) {
+            if (QFontDatabase::isFixedPitch(family) && isFixedPitchFont(QFont(family, 10))) {
+                return QFont(family, 10);
+            }
+        }
+        QFont fallback = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+        fallback.setPointSize(10);
+        return fallback;
+    }();
+    return font;
+}
 } // namespace
 
 TerminalWidget::TerminalWidget(QWidget *parent)
@@ -34,31 +88,15 @@ TerminalWidget::TerminalWidget(QWidget *parent)
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_InputMethodEnabled, true);
     setAttribute(Qt::WA_OpaquePaintEvent);
+    // PH2-03: hover tracking for the link hand cursor.
+    setMouseTracking(true);
 
     // Prefer a real terminal font; the system FixedFont on some locales
     // (e.g. NSimSun on zh-CN Windows) renders terminals poorly.
-    const QStringList preferred = {
-        QStringLiteral("Cascadia Mono"), QStringLiteral("Cascadia Code"),
-        QStringLiteral("Consolas"), QStringLiteral("Courier New"),
-    };
-    const QStringList families = QFontDatabase::families();
-    for (const QString &family : preferred) {
-        if (families.contains(family)) {
-            m_font = QFont(family, 10);
-            break;
-        }
-    }
-    if (m_font.family().isEmpty()) {
-        m_font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-    }
+    m_font = defaultTerminalFont();
     m_font.setStyleHint(QFont::TypeWriter);
     m_font.setStyleStrategy(QFont::StyleStrategy(QFont::PreferMatch | QFont::PreferAntialias));
     m_font.setKerning(false);
-
-    const QFontMetrics fm(m_font);
-    m_cellWidth = qMax(1, fm.horizontalAdvance(QLatin1Char('M')));
-    m_cellHeight = fm.height();
-    m_cellAscent = fm.ascent();
 
     // A terminal keeps its own dark color scheme regardless of the app
     // theme; the vterm default fg/bg map to QPalette::Text/Base.
@@ -79,6 +117,13 @@ TerminalWidget::TerminalWidget(QWidget *parent)
         m_scrollOffset = maxOffset - value;
         update();
     });
+
+    recomputeCellMetrics();
+
+    // PH2-02: timestamp gutter (Config default off).
+    m_showTimestamps = Config::instance().boolValue(QStringLiteral("terminal/showTimestamps"), false);
+    updateGutterWidth();
+    m_rowStamps.assign(defaultRows, QDateTime::currentMSecsSinceEpoch());
 
 #ifdef HSSH_HAS_LIBVTERM
     initializeTerminal();
@@ -117,8 +162,168 @@ void TerminalWidget::initializeTerminal()
 #endif
 }
 
+void TerminalWidget::setTerminalFont(const QFont &font)
+{
+    if (font.family() == m_font.family() && font.pointSize() == m_font.pointSize()) {
+        return;
+    }
+    m_font = font;
+    m_font.setStyleHint(QFont::TypeWriter);
+    m_font.setStyleStrategy(QFont::StyleStrategy(QFont::PreferMatch | QFont::PreferAntialias));
+    m_font.setKerning(false);
+    recomputeCellMetrics();
+    updateTerminalSize();
+    update();
+}
+
+bool TerminalWidget::recomputeCellMetrics()
+{
+    // Measure on *this* widget's paint device: QFontMetrics without a device
+    // resolves against the primary screen, so a window on a differently
+    // scaled monitor would size its cells for the wrong DPI and the painted
+    // glyphs would drift off the grid.
+    const QFontMetrics fm(m_font, this);
+    const int cellWidth = qMax(1, fm.horizontalAdvance(QLatin1Char('M')));
+    const int cellHeight = qMax(1, fm.height());
+    const int cellAscent = fm.ascent();
+    const bool monospace = isFixedPitchFont(m_font);
+    const int gutter = m_showTimestamps ? 11 * cellWidth : 0;
+    if (cellWidth == m_cellWidth && cellHeight == m_cellHeight
+        && cellAscent == m_cellAscent && monospace == m_monospaceFont
+        && gutter == m_gutterWidth) {
+        return false;
+    }
+    m_cellWidth = cellWidth;
+    m_cellHeight = cellHeight;
+    m_cellAscent = cellAscent;
+    m_monospaceFont = monospace;
+    m_gutterWidth = gutter;
+    return true;
+}
+
+void TerminalWidget::updateGutterWidth()
+{
+    m_gutterWidth = m_showTimestamps ? 11 * m_cellWidth : 0;
+}
+
+void TerminalWidget::setShowTimestamps(bool on)
+{
+    if (on == m_showTimestamps) {
+        return;
+    }
+    m_showTimestamps = on;
+    Config::instance().setValue(QStringLiteral("terminal/showTimestamps"), on);
+    Config::instance().sync();
+    updateGutterWidth();
+    updateTerminalSize();
+    update();
+}
+
+int TerminalWidget::bufferRowCount() const
+{
+#ifdef HSSH_HAS_LIBVTERM
+    return static_cast<int>(m_scrollback.size()) + m_rows;
+#else
+    return 0;
+#endif
+}
+
+QString TerminalWidget::outlineLineAt(int logicalRow) const
+{
+#ifdef HSSH_HAS_LIBVTERM
+    return lineText(logicalRow);
+#else
+    Q_UNUSED(logicalRow)
+    return {};
+#endif
+}
+
+void TerminalWidget::scrollToLogicalRow(int logicalRow)
+{
+#ifdef HSSH_HAS_LIBVTERM
+    const int maxOffset = static_cast<int>(m_scrollback.size());
+    // Place the requested row three lines below the top edge.
+    const int offset = qBound(0, maxOffset - logicalRow + 3, maxOffset);
+    if (offset != m_scrollOffset) {
+        m_scrollOffset = offset;
+        m_scrollBar->setValue(maxOffset - m_scrollOffset);
+        update();
+    }
+#endif
+}
+
+// PH2-01: merge wrapped physical lines into logical lines, then re-chunk at
+// newCols. Chunking is grid-column aware: a wide glyph never straddles a
+// boundary. Selections cannot track the geometry change and are dropped.
+void TerminalWidget::reflowScrollback(int newCols)
+{
+#ifdef HSSH_HAS_LIBVTERM
+    if (newCols <= 0 || m_scrollback.empty()) {
+        return;
+    }
+    clearSelection();
+
+    std::deque<ScrollbackEntry> reflowed;
+    std::vector<ScrollbackCell> logical; // glyphs of the current logical line
+    qint64 logicalStamp = 0;
+
+    const auto flushLogical = [&]() {
+        if (logical.empty()) {
+            return;
+        }
+        int col = 0;
+        size_t start = 0;
+        for (size_t i = 0; i < logical.size(); ++i) {
+            const int w = logical[i].width > 0 ? logical[i].width : 1;
+            if (col > 0 && col + w > newCols) {
+                ScrollbackEntry chunk;
+                chunk.cells.assign(logical.begin() + static_cast<long>(start),
+                                   logical.begin() + static_cast<long>(i));
+                chunk.arriveMs = logicalStamp;
+                chunk.wrapped = true;
+                reflowed.push_back(std::move(chunk));
+                start = i;
+                col = 0;
+            }
+            col += w;
+        }
+        ScrollbackEntry tail;
+        tail.cells.assign(logical.begin() + static_cast<long>(start), logical.end());
+        tail.arriveMs = logicalStamp;
+        tail.wrapped = false;
+        reflowed.push_back(std::move(tail));
+        logical.clear();
+    };
+
+    for (const ScrollbackEntry &entry : m_scrollback) {
+        if (logical.empty()) {
+            logicalStamp = entry.arriveMs;
+        }
+        logical.insert(logical.end(), entry.cells.begin(), entry.cells.end());
+        if (!entry.wrapped) {
+            flushLogical();
+        }
+    }
+    flushLogical(); // trailing wrapped run without an unwrapped terminator
+
+    while (static_cast<int>(reflowed.size()) > maxScrollbackLines) {
+        reflowed.pop_front(); // oldest lines fall out of the buffer
+    }
+    m_scrollback = std::move(reflowed);
+
+    if (!m_searchText.isEmpty()) {
+        updateSearch(m_searchText); // row indices shifted
+    }
+    updateScrollBar();
+    update();
+#endif
+}
+
 void TerminalWidget::feedData(const QByteArray &data)
 {
+    // PH2-04: sniff OSC 52 (clipboard set) regardless of libvterm, which
+    // does not surface this sequence.
+    scanOsc52(data);
 #ifdef HSSH_HAS_LIBVTERM
     if (m_vterm) {
         vterm_input_write(m_vterm, data.constData(), static_cast<size_t>(data.size()));
@@ -217,7 +422,7 @@ TerminalWidget::PaintCell TerminalWidget::makePaintCell(const ScrollbackCell &ce
 void TerminalWidget::drawCellRun(QPainter *painter, int row, int startCol, int span,
                                  const QString &text, const PaintCell &style) const
 {
-    const int x = m_margin + startCol * m_cellWidth;
+    const int x = contentX() + startCol * m_cellWidth;
     const int y = m_margin + row * m_cellHeight;
     painter->fillRect(QRect(x, y, span * m_cellWidth, m_cellHeight), style.bg);
 
@@ -271,11 +476,11 @@ void TerminalWidget::paintRowCells(QPainter *painter, int row, int startCol, int
         selected(first, col);
         if (!first) {
             if (selStartCol >= 0 && col >= selStartCol && col <= selEndCol) {
-                painter->fillRect(QRect(m_margin + col * m_cellWidth, m_margin + row * m_cellHeight,
+                painter->fillRect(QRect(contentX() + col * m_cellWidth, m_margin + row * m_cellHeight,
                                         m_cellWidth, m_cellHeight),
                                   m_selectionBg);
             } else if (searched(col)) {
-                painter->fillRect(QRect(m_margin + col * m_cellWidth, m_margin + row * m_cellHeight,
+                painter->fillRect(QRect(contentX() + col * m_cellWidth, m_margin + row * m_cellHeight,
                                         m_cellWidth, m_cellHeight),
                                   m_searchBg);
             }
@@ -285,7 +490,10 @@ void TerminalWidget::paintRowCells(QPainter *painter, int row, int startCol, int
 
         // Wide glyphs are painted per-cell: their advance comes from a
         // fallback font and would drift off the grid inside a longer run.
-        if (first->width != 1) {
+        // A proportional face (no fixed-pitch font available) is painted
+        // per-cell too, so the glyph advance can never drift away from the
+        // cell grid the selection and cursor are drawn on.
+        if (first->width != 1 || !m_monospaceFont) {
             drawCellRun(painter, row, col, qMax(1, first->width), first->text, *first);
             col += qMax(1, first->width);
             continue;
@@ -323,7 +531,7 @@ void TerminalWidget::drawCursor(QPainter *painter)
         return;
     }
 
-    const int x = m_margin + m_cursorPos.x() * m_cellWidth;
+    const int x = contentX() + m_cursorPos.x() * m_cellWidth;
     const int y = m_margin + m_cursorPos.y() * m_cellHeight;
     const QRect cellRect(x, y, m_cellWidth, m_cellHeight);
     const QColor cursorColor = palette().color(QPalette::Text);
@@ -359,11 +567,34 @@ void TerminalWidget::renderToPainter(QPainter *painter, const QRect &rect)
 
     const int startRow = qMax(0, (rect.top() - m_margin) / m_cellHeight);
     const int endRow = qMin(m_rows - 1, (rect.bottom() - m_margin) / m_cellHeight);
-    const int startCol = qMax(0, (rect.left() - m_margin) / m_cellWidth);
+    const int startCol = qMax(0, (rect.left() - contentX()) / m_cellWidth);
     const int endCol = qMin(m_cols - 1, (rect.right() - m_margin) / m_cellWidth);
 
     const int scrollbackSize = static_cast<int>(m_scrollback.size());
     const int firstVisibleRow = scrollbackSize - m_scrollOffset;
+
+    // PH2-02: the timestamp gutter, one "[HH:MM:SS]" left of every row.
+    if (m_showTimestamps) {
+        QFont gutterFont = m_font;
+        gutterFont.setBold(false);
+        painter->setFont(gutterFont);
+        painter->setPen(QColor(0x88, 0x88, 0x88));
+        for (int row = startRow; row <= endRow; ++row) {
+            const int logicalRow = firstVisibleRow + row;
+            qint64 stamp = 0;
+            if (logicalRow >= 0 && logicalRow < scrollbackSize) {
+                stamp = m_scrollback[static_cast<size_t>(logicalRow)].arriveMs;
+            } else {
+                const int vtermRow = logicalRow - scrollbackSize;
+                if (vtermRow >= 0 && vtermRow < static_cast<int>(m_rowStamps.size())) {
+                    stamp = m_rowStamps[static_cast<size_t>(vtermRow)];
+                }
+            }
+            const QDateTime time = QDateTime::fromMSecsSinceEpoch(stamp);
+            painter->drawText(m_margin, m_margin + row * m_cellHeight + m_cellAscent,
+                              time.toString(QStringLiteral("[HH:MM:SS]")));
+        }
+    }
 
     for (int row = startRow; row <= endRow; ++row) {
         const int logicalRow = firstVisibleRow + row;
@@ -377,7 +608,7 @@ void TerminalWidget::renderToPainter(QPainter *painter, const QRect &rect)
                 : kNoMatches;
 
         if (logicalRow >= 0 && logicalRow < scrollbackSize) {
-            const auto &line = m_scrollback[logicalRow];
+            const auto &line = m_scrollback[logicalRow].cells;
             // The line stores one entry per glyph (wide-char continuation
             // cells are omitted), so build a sparse grid-column view first.
             std::vector<const ScrollbackCell *> grid(static_cast<size_t>(m_cols), nullptr);
@@ -595,6 +826,9 @@ void TerminalWidget::resizeEvent(QResizeEvent *event)
         m_searchBar->move(qMax(8, width() - m_searchBar->width() - 16), 8);
     }
 #ifdef HSSH_HAS_LIBVTERM
+    if (recomputeCellMetrics()) {
+        update();
+    }
     updateTerminalSize();
 #endif
 }
@@ -603,8 +837,23 @@ void TerminalWidget::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
 #ifdef HSSH_HAS_LIBVTERM
+    if (recomputeCellMetrics()) {
+        update();
+    }
     updateTerminalSize();
 #endif
+}
+
+bool TerminalWidget::event(QEvent *event)
+{
+    const bool handled = QWidget::event(event);
+    // Moving the window to a monitor with a different scale changes the
+    // device metrics the glyphs are rasterized with.
+    if (event->type() == QEvent::ScreenChangeInternal && recomputeCellMetrics()) {
+        updateTerminalSize();
+        update();
+    }
+    return handled;
 }
 
 void TerminalWidget::updateTerminalSize()
@@ -614,17 +863,39 @@ void TerminalWidget::updateTerminalSize()
         return;
 
     const int scrollBarWidth = m_scrollBar->isVisible() ? style()->pixelMetric(QStyle::PM_ScrollBarExtent) : 0;
-    const int newCols = qMax(1, (width() - scrollBarWidth - 2 * m_margin) / m_cellWidth);
+    const int newCols = qMax(1, (width() - scrollBarWidth - 2 * m_margin - m_gutterWidth) / m_cellWidth);
     const int newRows = qMax(1, (height() - 2 * m_margin) / m_cellHeight);
     if (newCols != m_cols || newRows != m_rows) {
+        const bool colsChanged = (newCols != m_cols);
         m_cols = newCols;
         m_rows = newRows;
+        m_rowStamps.assign(static_cast<size_t>(newRows), QDateTime::currentMSecsSinceEpoch());
         vterm_set_size(m_vterm, m_rows, m_cols);
         // A size change may queue a reply (or the remote shell re-queries
         // after SIGWINCH); make sure it reaches the wire promptly.
         sendOutputBuffer();
         updateScrollBar();
         emit sizeChanged(m_cols, m_rows);
+        if (colsChanged && !m_scrollback.empty()) {
+            // PH2-01: re-wrap the scrollback once the columns settle (drag
+            // storms would otherwise reflow dozens of times per gesture).
+            m_reflowTargetCols = newCols;
+            if (!m_reflowTimer) {
+                m_reflowTimer = new QTimer(this);
+                m_reflowTimer->setSingleShot(true);
+                m_reflowTimer->setInterval(150);
+                connect(m_reflowTimer, &QTimer::timeout, this, [this]() {
+                    if (m_reflowTargetCols > 0 && m_reflowTargetCols != m_cols) {
+                        m_reflowTargetCols = m_cols; // stale request
+                    }
+                    if (m_reflowTargetCols > 0) {
+                        reflowScrollback(m_reflowTargetCols);
+                    }
+                    m_reflowTargetCols = -1;
+                });
+            }
+            m_reflowTimer->start();
+        }
     }
 #endif
 }
@@ -661,9 +932,55 @@ void TerminalWidget::scrollToBottom()
 #endif
 }
 
+// PH1-04: while the remote application reports mouse events (vim, htop,
+// tmux...), clicks/drags/wheel are encoded and forwarded; plain-text
+// selection stays available through Shift (xterm convention). The encoding
+// itself (SGR/X10) is done by libvterm and leaves via dataToSend.
+namespace {
+VTermModifier vtermModifiers(Qt::KeyboardModifiers mods)
+{
+    VTermModifier mod = VTERM_MOD_NONE;
+    if (mods & Qt::ShiftModifier) {
+        mod = static_cast<VTermModifier>(mod | VTERM_MOD_SHIFT);
+    }
+    if (mods & Qt::ControlModifier) {
+        mod = static_cast<VTermModifier>(mod | VTERM_MOD_CTRL);
+    }
+    if (mods & Qt::AltModifier) {
+        mod = static_cast<VTermModifier>(mod | VTERM_MOD_ALT);
+    }
+    return mod;
+}
+
+int vtermButton(Qt::MouseButton button)
+{
+    switch (button) {
+    case Qt::LeftButton:
+        return 1;
+    case Qt::MiddleButton:
+        return 2;
+    case Qt::RightButton:
+        return 3;
+    default:
+        return 0;
+    }
+}
+} // namespace
+
 void TerminalWidget::wheelEvent(QWheelEvent *event)
 {
 #ifdef HSSH_HAS_LIBVTERM
+    // Shift bypasses remote reporting (local scrollback), like xterm.
+    if (m_mouseMode != 0 && !(event->modifiers() & Qt::ShiftModifier)) {
+        const QPoint cell = cellAtPosition(event->position().toPoint());
+        vterm_mouse_move(m_vterm, cell.y(), cell.x(), vtermModifiers(event->modifiers()));
+        const int steps = qAbs(event->angleDelta().y()) / 120;
+        for (int i = 0; i < qMax(1, steps); ++i) {
+            vterm_mouse_button(m_vterm, event->angleDelta().y() > 0 ? 4 : 5, true,
+                               vtermModifiers(event->modifiers()));
+        }
+        return;
+    }
     if (event->angleDelta().y() > 0) {
         m_scrollBar->triggerAction(QAbstractSlider::SliderSingleStepSub);
     } else if (event->angleDelta().y() < 0) {
@@ -676,7 +993,7 @@ void TerminalWidget::wheelEvent(QWheelEvent *event)
 
 QPoint TerminalWidget::cellAtPosition(const QPoint &pos) const
 {
-    const int col = qBound(0, (pos.x() - m_margin) / m_cellWidth, m_cols - 1);
+    const int col = qBound(0, (pos.x() - contentX()) / m_cellWidth, m_cols - 1);
     const int row = qBound(0, (pos.y() - m_margin) / m_cellHeight, m_rows - 1);
     return QPoint(col, row);
 }
@@ -688,8 +1005,26 @@ int TerminalWidget::logicalRowAt(int viewRow) const
 
 void TerminalWidget::mousePressEvent(QMouseEvent *event)
 {
+#ifdef HSSH_HAS_LIBVTERM
+    const int button = vtermButton(event->button());
+    if (m_mouseMode != 0 && button != 0 && !(event->modifiers() & Qt::ShiftModifier)) {
+        setFocus();
+        const QPoint cell = cellAtPosition(event->pos());
+        vterm_mouse_move(m_vterm, cell.y(), cell.x(), vtermModifiers(event->modifiers()));
+        vterm_mouse_button(m_vterm, button, true, vtermModifiers(event->modifiers()));
+        return;
+    }
+#endif
     if (event->button() == Qt::LeftButton) {
         setFocus();
+        // PH2-03: Ctrl+Click opens the link under the cursor.
+        if ((event->modifiers() & Qt::ControlModifier) && m_mouseMode == 0) {
+            const QString link = linkAt(event->pos());
+            if (!link.isEmpty()) {
+                QDesktopServices::openUrl(QUrl(link, QUrl::StrictMode));
+                return;
+            }
+        }
         const QPoint cell = cellAtPosition(event->pos());
         m_selecting = true;
         m_selAnchorRow = m_selEndRow = logicalRowAt(cell.y());
@@ -705,6 +1040,17 @@ void TerminalWidget::mousePressEvent(QMouseEvent *event)
 
 void TerminalWidget::mouseMoveEvent(QMouseEvent *event)
 {
+#ifdef HSSH_HAS_LIBVTERM
+    const bool anyButton = event->buttons() != Qt::NoButton;
+    // Drag reporting (mode 2+) needs a held button; move reporting (3)
+    // streams unconditionally. Shift bypasses to local selection.
+    if (m_mouseMode >= 2 && !(event->modifiers() & Qt::ShiftModifier)
+        && (m_mouseMode >= 3 || anyButton)) {
+        const QPoint cell = cellAtPosition(event->pos());
+        vterm_mouse_move(m_vterm, cell.y(), cell.x(), vtermModifiers(event->modifiers()));
+        return;
+    }
+#endif
     if (m_selecting && (event->buttons() & Qt::LeftButton)) {
         const QPoint cell = cellAtPosition(event->pos());
         const int row = logicalRowAt(cell.y());
@@ -719,11 +1065,30 @@ void TerminalWidget::mouseMoveEvent(QMouseEvent *event)
         }
         return;
     }
+    // PH2-03: hover 鈥?switch to the hand cursor while over a link.
+    if (event->buttons() == Qt::NoButton && m_mouseMode == 0) {
+        const QString link = linkAt(event->pos());
+        if (link != m_hoverLink) {
+            m_hoverLink = link;
+            setCursor(link.isEmpty() ? Qt::ArrowCursor : Qt::PointingHandCursor);
+            setToolTip(link);
+        }
+        return;
+    }
     QWidget::mouseMoveEvent(event);
 }
 
 void TerminalWidget::mouseReleaseEvent(QMouseEvent *event)
 {
+#ifdef HSSH_HAS_LIBVTERM
+    const int button = vtermButton(event->button());
+    if (m_mouseMode != 0 && button != 0 && !(event->modifiers() & Qt::ShiftModifier)) {
+        const QPoint cell = cellAtPosition(event->pos());
+        vterm_mouse_move(m_vterm, cell.y(), cell.x(), vtermModifiers(event->modifiers()));
+        vterm_mouse_button(m_vterm, button, false, vtermModifiers(event->modifiers()));
+        return;
+    }
+#endif
     if (event->button() == Qt::LeftButton && m_selecting) {
         m_selecting = false;
         // A plain click (no drag) just clears the selection.
@@ -738,6 +1103,15 @@ void TerminalWidget::mouseReleaseEvent(QMouseEvent *event)
 void TerminalWidget::contextMenuEvent(QContextMenuEvent *event)
 {
     QMenu menu(this);
+    // PH2-03: link actions when the menu opens on a URL.
+    const QString link = linkAt(event->pos());
+    QAction *openLinkAction = nullptr;
+    QAction *copyLinkAction = nullptr;
+    if (!link.isEmpty()) {
+        openLinkAction = menu.addAction(tr("Open Link"));
+        copyLinkAction = menu.addAction(tr("Copy Link Address"));
+        menu.addSeparator();
+    }
     QAction *copyAction = menu.addAction(tr("Copy"));
     copyAction->setEnabled(m_hasSelection);
     QAction *pasteAction = menu.addAction(tr("Paste"));
@@ -745,9 +1119,19 @@ void TerminalWidget::contextMenuEvent(QContextMenuEvent *event)
     menu.addSeparator();
     QAction *findAction = menu.addAction(tr("Find..."));
     findAction->setShortcut(QKeySequence::Find);
+    menu.addSeparator();
+    QAction *timestampsAction = menu.addAction(tr("Show Timestamps"));
+    timestampsAction->setCheckable(true);
+    timestampsAction->setChecked(m_showTimestamps);
+    connect(timestampsAction, &QAction::toggled, this,
+            &TerminalWidget::setShowTimestamps);
 
     const QAction *chosen = menu.exec(event->globalPos());
-    if (chosen == copyAction) {
+    if (chosen == openLinkAction && openLinkAction) {
+        QDesktopServices::openUrl(QUrl(link, QUrl::StrictMode));
+    } else if (chosen == copyLinkAction && copyLinkAction) {
+        QGuiApplication::clipboard()->setText(link);
+    } else if (chosen == copyAction) {
         copySelectionToClipboard();
     } else if (chosen == pasteAction) {
         pasteFromClipboard();
@@ -783,7 +1167,7 @@ QString TerminalWidget::lineTextRange(int logicalRow, int startCol, int endCol) 
     if (logicalRow >= 0 && logicalRow < sbSize) {
         // Entries are sequential from column 0; wide-char continuation
         // cells are omitted, so walk with a running column counter.
-        const auto &line = m_scrollback[static_cast<size_t>(logicalRow)];
+        const auto &line = m_scrollback[static_cast<size_t>(logicalRow)].cells;
         int col = 0;
         for (const ScrollbackCell &cell : line) {
             const int w = cell.width > 0 ? cell.width : 1;
@@ -828,6 +1212,158 @@ QString TerminalWidget::lineTextRange(int logicalRow, int startCol, int endCol) 
 QString TerminalWidget::lineText(int logicalRow) const
 {
     return lineTextRange(logicalRow, 0, m_cols - 1);
+}
+
+QString TerminalWidget::linkAt(const QPoint &pos) const
+{
+#ifdef HSSH_HAS_LIBVTERM
+    const QPoint cell = cellAtPosition(pos);
+    const QString line = lineText(logicalRowAt(cell.y()));
+    if (line.isEmpty()) {
+        return {};
+    }
+    const int col = qBound(0, cell.x(), line.size() - 1);
+    if (line.at(col).isSpace()) {
+        return {};
+    }
+    // The token is the maximal run of non-space characters around the click.
+    int start = col;
+    while (start > 0 && !line.at(start - 1).isSpace()) {
+        --start;
+    }
+    int end = col + 1;
+    while (end < line.size() && !line.at(end).isSpace()) {
+        ++end;
+    }
+    QString token = line.mid(start, end - start);
+
+    static const QRegularExpression inner(
+        QStringLiteral("(https?://|file://|mailto:)[^\\s]+"),
+        QRegularExpression::CaseInsensitiveOption);
+    const auto match = inner.match(token);
+    if (!match.hasMatch()) {
+        return {};
+    }
+    // The URL may be glued to prose ("(see https://x/y).") 鈥?take it from the
+    // scheme on and drop trailing sentence punctuation.
+    QString link = token.mid(match.capturedStart(1));
+    while (!link.isEmpty()
+           && QStringLiteral(".,;:!?)>]}\"'").contains(link.right(1))) {
+        link.chop(1);
+    }
+    return link;
+#else
+    Q_UNUSED(pos)
+    return {};
+#endif
+}
+
+void TerminalWidget::scanOsc52(const QByteArray &data)
+{
+    if (m_osc52Handling) {
+        return; // a prompt is up; drop concurrent sequences
+    }
+    for (char c : data) {
+        switch (m_osc52State) {
+        case Osc52State::Ground:
+            if (c == '\x1b') {
+                m_osc52State = Osc52State::Esc;
+            }
+            break;
+        case Osc52State::Esc:
+            if (c == ']') {
+                m_osc52State = Osc52State::Body;
+                m_osc52Buffer.clear();
+            } else if (c != '\x1b') {
+                m_osc52State = Osc52State::Ground;
+            }
+            break;
+        case Osc52State::Body:
+            if (c == '\x07') {
+                m_osc52State = Osc52State::Ground;
+                handleOsc52(m_osc52Buffer);
+                m_osc52Buffer.clear();
+            } else if (c == '\x1b') {
+                m_osc52State = Osc52State::BodyEsc;
+            } else {
+                m_osc52Buffer.append(c);
+            }
+            break;
+        case Osc52State::BodyEsc:
+            // "\x1b\\" (ST) terminates; anything else aborts the sequence.
+            m_osc52State = Osc52State::Ground;
+            m_osc52Buffer.clear();
+            if (c == '\\') {
+                handleOsc52(m_osc52Buffer);
+            } else if (c == '\x1b') {
+                m_osc52State = Osc52State::Esc;
+            }
+            break;
+        }
+        // Runaway OSC (no terminator): drop it instead of growing forever.
+        if (m_osc52Buffer.size() > 8 * 1024 * 1024) {
+            m_osc52State = Osc52State::Ground;
+            m_osc52Buffer.clear();
+        }
+    }
+}
+
+QByteArray TerminalWidget::decodeOsc52(const QByteArray &payload)
+{
+    // Format: "52;Ps;Pb64" — Ps selects the clipboard(s), Pb64 is the base64
+    // payload. An empty Pb64 is a clipboard query; we never answer those.
+    if (!payload.startsWith("52;")) {
+        return {};
+    }
+    const QByteArray rest = payload.mid(3);
+    const int semi = rest.indexOf(';');
+    if (semi < 0) {
+        return {};
+    }
+    const QByteArray selector = rest.left(semi);
+    const QByteArray b64 = rest.mid(semi + 1);
+    if (b64.isEmpty()) {
+        return {};
+    }
+    bool wanted = selector.isEmpty();
+    for (char s : selector) {
+        wanted = wanted || s == 'c' || s == 'p' || s == 's';
+    }
+    if (!wanted) {
+        return {};
+    }
+    const auto decoded = QByteArray::fromBase64Encoding(
+        b64, QByteArray::AbortOnBase64DecodingErrors);
+    if (!decoded || decoded.decoded.size() > 1024 * 1024) {
+        return {}; // corrupt or absurdly large
+    }
+    return decoded.decoded;
+}
+
+void TerminalWidget::handleOsc52(const QByteArray &payload)
+{
+    const QByteArray decoded = decodeOsc52(payload);
+    if (decoded.isEmpty()) {
+        return;
+    }
+    const QString mode = Config::instance().stringValue(
+        QStringLiteral("terminal/osc52Mode"), QStringLiteral("prompt"));
+    if (mode == QLatin1String("deny")) {
+        return;
+    }
+    if (mode != QLatin1String("allow")) {
+        m_osc52Handling = true;
+        const QString text = tr("The remote host wants to put %n byte(s) into your "
+                                "clipboard. Allow?", nullptr, decoded.size());
+        const auto answer = QMessageBox::question(
+            this, tr("Remote Clipboard Access"), text,
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        m_osc52Handling = false;
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    }
+    QGuiApplication::clipboard()->setText(QString::fromUtf8(decoded));
 }
 
 QString TerminalWidget::bufferText(int maxLines) const
@@ -1098,7 +1634,7 @@ bool TerminalWidget::focusNextPrevChild(bool next)
 
 QSize TerminalWidget::sizeHint() const
 {
-    return QSize(m_cols * m_cellWidth + 2 * m_margin, m_rows * m_cellHeight + 2 * m_margin);
+    return QSize(m_cols * m_cellWidth + 2 * m_margin + m_gutterWidth, m_rows * m_cellHeight + 2 * m_margin);
 }
 
 QSize TerminalWidget::minimumSizeHint() const
@@ -1159,11 +1695,18 @@ void TerminalWidget::scheduleRepaint(const QRect &rect)
 int TerminalWidget::screenDamage(VTermRect rect, void *user)
 {
     auto *widget = static_cast<TerminalWidget *>(user);
-    const int left = widget->m_margin + rect.start_col * widget->m_cellWidth;
+    const int left = widget->contentX() + rect.start_col * widget->m_cellWidth;
     const int top = widget->m_margin + rect.start_row * widget->m_cellHeight;
     const int right = widget->m_margin + rect.end_col * widget->m_cellWidth;
     const int bottom = widget->m_margin + rect.end_row * widget->m_cellHeight;
     widget->scheduleRepaint(QRect(left, top, right - left, bottom - top));
+    // PH2-02: per-row arrival stamps feed the timestamp gutter.
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    for (int row = rect.start_row; row <= rect.end_row && row < static_cast<int>(widget->m_rowStamps.size()); ++row) {
+        if (row >= 0) {
+            widget->m_rowStamps[static_cast<size_t>(row)] = now;
+        }
+    }
     return 1;
 }
 
@@ -1172,7 +1715,7 @@ int TerminalWidget::screenMoveRect(VTermRect dest, VTermRect src, void *user)
     auto *widget = static_cast<TerminalWidget *>(user);
     // Scroll: only the affected region needs repainting, not the whole widget.
     const auto toPixels = [widget](const VTermRect &r) {
-        return QRect(widget->m_margin + r.start_col * widget->m_cellWidth,
+        return QRect(widget->contentX() + r.start_col * widget->m_cellWidth,
                      widget->m_margin + r.start_row * widget->m_cellHeight,
                      (r.end_col - r.start_col) * widget->m_cellWidth,
                      (r.end_row - r.start_row) * widget->m_cellHeight);
@@ -1190,7 +1733,7 @@ int TerminalWidget::screenMoveCursor(VTermPos pos, VTermPos oldpos, int visible,
     // the old and new cursor cells; a full repaint per keystroke made a
     // maximized terminal visibly laggy.
     const auto cellRect = [widget](const VTermPos &p) {
-        return QRect(widget->m_margin + p.col * widget->m_cellWidth,
+        return QRect(widget->contentX() + p.col * widget->m_cellWidth,
                      widget->m_margin + p.row * widget->m_cellHeight,
                      widget->m_cellWidth, widget->m_cellHeight);
     };
@@ -1207,6 +1750,12 @@ int TerminalWidget::screenSetTermProp(VTermProp prop, VTermValue *val, void *use
         if (val->string.str) {
             emit widget->titleChanged(QString::fromUtf8(val->string.str, static_cast<int>(val->string.len)));
         }
+    } else if (prop == VTERM_PROP_MOUSE) {
+        // The application enabled/disabled mouse reporting (DECSET
+        // 1000/1002/1006): 0 off, 1 click, 2 drag, 3 move. While active,
+        // mouse events are encoded (SGR) and sent to the remote instead of
+        // driving local selection/scrollback.
+        widget->m_mouseMode = val->number;
     }
     return 1;
 }
@@ -1230,8 +1779,9 @@ int TerminalWidget::screenSbPushLine(int cols, const VTermScreenCell *cells, voi
 {
     auto *widget = static_cast<TerminalWidget *>(user);
     const int oldSize = static_cast<int>(widget->m_scrollback.size());
-    ScrollbackLine line;
-    line.reserve(cols);
+    ScrollbackEntry entry;
+    entry.arriveMs = QDateTime::currentMSecsSinceEpoch();
+    entry.cells.reserve(cols);
     for (int i = 0; i < cols; ) {
         ScrollbackCell sc;
         sc.width = cells[i].width;
@@ -1241,10 +1791,22 @@ int TerminalWidget::screenSbPushLine(int cols, const VTermScreenCell *cells, voi
         for (int c = 0; c < VTERM_MAX_CHARS_PER_CELL; ++c) {
             sc.chars[c] = cells[i].chars[c];
         }
-        line.push_back(sc);
+        entry.cells.push_back(sc);
         i += cells[i].width > 0 ? cells[i].width : 1;
     }
-    widget->m_scrollback.push_back(std::move(line));
+    // PH2-01 wrap heuristic: the line filled the row exactly (ignoring the
+    // blank padding cells), so the next physical line probably continues it.
+    int lastContentCol = 0;
+    int col = 0;
+    for (const ScrollbackCell &cell : entry.cells) {
+        const int w = cell.width > 0 ? cell.width : 1;
+        if (cell.chars[0] != 0) {
+            lastContentCol = col + w;
+        }
+        col += w;
+    }
+    entry.wrapped = (lastContentCol >= cols);
+    widget->m_scrollback.push_back(std::move(entry));
     widget->onScrollbackLinePushed(oldSize);
     if (static_cast<int>(widget->m_scrollback.size()) > maxScrollbackLines) {
         widget->m_scrollback.pop_front();
@@ -1262,7 +1824,7 @@ int TerminalWidget::screenSbPopLine(int cols, VTermScreenCell *cells, void *user
     }
     // Scrollback geometry changes in ways a selection can't track; drop it.
     widget->clearSelection();
-    const auto &line = widget->m_scrollback.back();
+    const auto &line = widget->m_scrollback.back().cells;
     // The scrollback stores one entry per glyph (wide-char continuation cells
     // are omitted). Restore them at their ORIGINAL grid columns: a wide glyph
     // (width=2) must be followed by a width=0 continuation cell, otherwise

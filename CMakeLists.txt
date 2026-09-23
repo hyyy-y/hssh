@@ -33,7 +33,11 @@ if(libssh_FOUND)
 else()
     message(STATUS "libssh not found via find_package; fetching from source...")
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/FetchLibSSH.cmake)
-    if(libssh_FOUND)
+if(Qt6_WebSockets_FOUND)
+    target_link_libraries(${PROJECT_NAME} PRIVATE Qt::WebSockets)
+endif()
+
+if(libssh_FOUND)
         message(STATUS "libssh fetched and built from source")
         add_compile_definitions(HSSH_HAS_LIBSSH)
     else()
@@ -57,6 +61,38 @@ else()
     endif()
 endif()
 
+# ---------------------------------------------------------------------------
+# PH0-06: optional feature switches. Everything below degrades gracefully —
+# a machine without the module/dependency still builds.
+# ---------------------------------------------------------------------------
+
+# GSSAPI/Kerberos authentication (PH2-11) is opt-in: it changes the bundled
+# libssh build (full rebuild of _deps) and needs a domain environment to test.
+option(HSSH_WITH_GSSAPI "Build the bundled libssh with GSSAPI/Kerberos (SSPI on Windows)" OFF)
+if(HSSH_WITH_GSSAPI)
+    add_compile_definitions(HSSH_HAS_GSSAPI)
+    message(STATUS "GSSAPI enabled — libssh will be built with GSSAPI support")
+endif()
+
+# Qt6 WebSockets for the agent /ws endpoint (PH2-14); optional.
+find_package(Qt6 QUIET COMPONENTS WebSockets)
+if(Qt6_WebSockets_FOUND)
+    message(STATUS "Qt6 WebSockets found — agent WebSocket endpoint available")
+    add_compile_definitions(HSSH_HAS_WEBSOCKETS)
+else()
+    message(STATUS "Qt6 WebSockets not found — agent WebSocket endpoint disabled")
+endif()
+
+# System OpenSSH client (ControlMaster PH3-07, FIDO2 PH3-10 fallback paths).
+find_program(HSSH_SSH_EXECUTABLE NAMES ssh ssh.exe)
+if(HSSH_SSH_EXECUTABLE)
+    string(REPLACE "\\" "/" HSSH_SSH_BIN_PATH "${HSSH_SSH_EXECUTABLE}")
+    add_compile_definitions(HSSH_HAS_SSH_BIN HSSH_SSH_BIN="${HSSH_SSH_BIN_PATH}")
+    message(STATUS "System ssh found: ${HSSH_SSH_EXECUTABLE}")
+else()
+    message(STATUS "System ssh not found — ControlMaster/FIDO2 fallbacks disabled")
+endif()
+
 # Source files
 set(HSSH_SOURCES
     src/main.cpp
@@ -73,18 +109,34 @@ set(HSSH_SOURCES
     src/app/MainWindow.h
     src/app/SessionTab.cpp
     src/app/SessionTab.h
+    src/app/dialogs/AppearanceDialog.cpp
+    src/app/dialogs/AppearanceDialog.h
+    src/app/FloatingTabWindow.cpp
+    src/app/FloatingTabWindow.h
+    src/app/dialogs/KeyManagerDialog.cpp
+    src/app/dialogs/KeyManagerDialog.h
+    src/app/dialogs/KbdintPromptDialog.cpp
+    src/app/dialogs/KbdintPromptDialog.h
     src/app/dialogs/EditFolderDialog.cpp
     src/app/dialogs/EditFolderDialog.h
     src/app/dialogs/DiffDialog.cpp
     src/app/dialogs/DiffDialog.h
+    src/app/dialogs/ImportSshConfigDialog.cpp
+    src/app/dialogs/ImportSshConfigDialog.h
     src/app/dialogs/NewSessionDialog.cpp
     src/app/dialogs/NewSessionDialog.h
     src/app/dialogs/PortForwardDialog.cpp
     src/app/dialogs/PortForwardDialog.h
+    src/app/dialogs/SessionLogViewer.cpp
+    src/app/dialogs/SessionLogViewer.h
     src/app/dialogs/SettingsDialog.cpp
     src/app/dialogs/SettingsDialog.h
     src/app/widgets/DiffView.cpp
     src/app/widgets/DiffView.h
+    src/app/widgets/CommandPalette.cpp
+    src/app/widgets/CommandPalette.h
+    src/app/widgets/TerminalOutlineWidget.cpp
+    src/app/widgets/TerminalOutlineWidget.h
     src/app/widgets/FileCompareWidget.cpp
     src/app/widgets/FileCompareWidget.h
     src/app/widgets/LocalFileWidget.cpp
@@ -99,6 +151,8 @@ set(HSSH_SOURCES
     src/app/TransferRegistry.h
     src/core/ConnectionManager.cpp
     src/core/ConnectionManager.h
+    src/core/KeyStore.cpp
+    src/core/KeyStore.h
     src/core/PortForward.cpp
     src/core/PortForward.h
     src/core/SessionConfig.cpp
@@ -121,6 +175,8 @@ set(HSSH_SOURCES
     src/core/transport/TransportFactory.h
     src/terminal/LocalShellProcess.cpp
     src/terminal/LocalShellProcess.h
+    src/terminal/SerialShellProcess.cpp
+    src/terminal/SerialShellProcess.h
     src/terminal/ShellProcess.cpp
     src/terminal/ShellProcess.h
     src/terminal/SshShellProcess.cpp
@@ -129,6 +185,8 @@ set(HSSH_SOURCES
     src/terminal/TerminalSession.h
     src/terminal/TerminalWidget.cpp
     src/terminal/TerminalWidget.h
+    src/terminal/ZModemEngine.cpp
+    src/terminal/ZModemEngine.h
     src/utils/Config.cpp
     src/utils/Config.h
     src/utils/Crypto.cpp
@@ -139,6 +197,8 @@ set(HSSH_SOURCES
     src/utils/Logger.h
     src/utils/TextDiff.cpp
     src/utils/TextDiff.h
+    src/utils/Theme.cpp
+    src/utils/Theme.h
     resources/resources.qrc
     resources/hssh.rc
 )
@@ -232,7 +292,7 @@ install(TARGETS ${PROJECT_NAME}
     BUNDLE DESTINATION .
 )
 
-# One-click portable package (Windows): `cmake --build . --target dist`
+# One-click portable package (Windows): `cmake --build . --target portable`
 # Collects hssh.exe + Qt runtime + plugins + bundled conpty into dist/ and
 # zips it as hssh-portable-win64.zip next to the build directory.
 if(WIN32)
@@ -257,8 +317,13 @@ if(WIN32)
                 ${CMAKE_SOURCE_DIR}/third_party/conpty/conpty.dll
                 ${CMAKE_SOURCE_DIR}/third_party/conpty/OpenConsole.exe
                 ${HSSH_DIST_DIR}/
-            COMMAND powershell -NoProfile -Command
-                "Compress-Archive -Path '${HSSH_DIST_DIR}/*' -DestinationPath '${CMAKE_BINARY_DIR}/hssh-portable-win64.zip' -Force"
+            # Archive with cmake -E tar (PowerShell's Compress-Archive needs a
+            # working .NET type system, which is not a given on every machine).
+            # -E chdir instead of WORKING_DIRECTORY: the rm -rf above must not
+            # run with its own target directory as the current directory.
+            COMMAND ${CMAKE_COMMAND} -E chdir ${HSSH_DIST_DIR}
+                ${CMAKE_COMMAND} -E tar cf
+                ${CMAKE_BINARY_DIR}/hssh-portable-win64.zip --format=zip .
             DEPENDS ${PROJECT_NAME}
             COMMENT "Packaging portable build into dist/ and hssh-portable-win64.zip"
         )

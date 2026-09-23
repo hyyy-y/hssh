@@ -1,6 +1,7 @@
 #include "SftpWidget.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QDateTime>
 #include <QDir>
 #include <QDragEnterEvent>
@@ -52,6 +53,14 @@ SftpWidget::SftpWidget(const SessionConfig &config, QWidget *parent)
     navBar->addWidget(homeButton);
     navBar->addWidget(refreshButton);
     navBar->addWidget(m_pathEdit, 1);
+    // PH2-09: transfer channel picker — SFTP (resumable) or SCP.
+    m_methodBox = new QComboBox(this);
+    m_methodBox->addItem(tr("SFTP"), QStringLiteral("sftp"));
+    m_methodBox->addItem(tr("SCP"), QStringLiteral("scp"));
+    m_methodBox->setToolTip(tr("Transfer method for uploads and downloads.\n"
+                               "SFTP supports resume and directory sync; SCP is a "
+                               "single-channel legacy fallback."));
+    navBar->addWidget(m_methodBox);
     navBar->addWidget(m_uploadButton);
     layout->addLayout(navBar);
 
@@ -203,14 +212,58 @@ void SftpWidget::setRowColors(const QHash<QString, QColor> &colors)
 
 void SftpWidget::downloadTo(const QString &remotePath, const QString &localPath)
 {
+    if (transferMethod() == QLatin1String("scp")) {
+        startCopyTransfer(false, remotePath, localPath);
+        return;
+    }
     trackTransfer(remotePath, TransferRegistry::Direction::Download, true);
     m_sftp->download(remotePath, localPath);
 }
 
 void SftpWidget::uploadTo(const QString &localPath, const QString &remotePath)
 {
+    if (transferMethod() == QLatin1String("scp")) {
+        startCopyTransfer(true, remotePath, localPath);
+        return;
+    }
     trackTransfer(remotePath, TransferRegistry::Direction::Upload, true);
     m_sftp->upload(localPath, remotePath);
+}
+
+QString SftpWidget::transferMethod() const
+{
+    return m_methodBox ? m_methodBox->currentData().toString() : QStringLiteral("sftp");
+}
+
+// PH2-09: SCP route — the same ChannelCopySession channel the agent uses.
+// The worker must be PARENTLESS (it moveToThreads itself; see the identical
+// comment in AgentHttpServer::startTabTransfer) and is freed on finish.
+void SftpWidget::startCopyTransfer(bool isUpload, const QString &remotePath,
+                                   const QString &localPath)
+{
+    trackTransfer(remotePath, isUpload ? TransferRegistry::Direction::Upload
+                                       : TransferRegistry::Direction::Download,
+                  true);
+    auto *worker = new ChannelCopySession(m_config, ChannelCopySession::Mode::Scp);
+    m_copyWorker = worker;
+    connect(worker, &TransferSession::transferProgress, this, &SftpWidget::onTransferProgress);
+    connect(worker, &TransferSession::transferFinished, this,
+            [this, worker](const QString &path, bool ok, const QString &message) {
+                onTransferFinished(path, ok, message);
+                worker->deleteLater();
+                if (m_copyWorker == worker) {
+                    m_copyWorker = nullptr;
+                }
+            });
+    connect(worker, &TransferSession::errorOccurred, this, [this](const QString &message) {
+        m_statusLabel->setText(tr("Error: %1").arg(message));
+    });
+    worker->start();
+    if (isUpload) {
+        worker->upload(localPath, remotePath, true);
+    } else {
+        worker->download(remotePath, localPath, true);
+    }
 }
 
 void SftpWidget::ensureRemoteDir(const QString &path)
@@ -446,7 +499,12 @@ QProgressDialog *SftpWidget::ensureProgressDialog()
         m_progress->setAutoClose(true);
         m_progress->setAutoReset(true);
         connect(m_progress, &QProgressDialog::canceled, this, [this]() {
-            m_sftp->cancelTransfer();
+            // PH2-09: SCP transfers cancel through their own worker.
+            if (m_copyWorker) {
+                m_copyWorker->cancelTransfer();
+            } else {
+                m_sftp->cancelTransfer();
+            }
         });
     }
     return m_progress;

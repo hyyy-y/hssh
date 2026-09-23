@@ -10,6 +10,8 @@
 #include <memory>
 
 #ifdef HSSH_HAS_LIBSSH
+#include "core/KeyStore.h"
+#include "core/SshConnect.h"
 #include <libssh/libssh.h>
 #endif
 
@@ -37,6 +39,17 @@ public:
 
     void setSessionConfig(const SessionConfig &config);
     [[nodiscard]] SessionConfig sessionConfig() const;
+
+#ifdef HSSH_HAS_LIBSSH
+    // PH2-12: consulted when the server host key is unknown/changed during
+    // connect. Without one, the security/hostKeyPolicy config applies
+    // (TOFU default: accept new keys, reject changed keys).
+    void setHostKeyVerifier(KeyStore::HostKeyVerifier verifier);
+    // PH2-13: consulted for interactive keyboard-interactive (2FA) rounds.
+    // Without one, rounds beyond a plain password round fail with a clear
+    // error (headless/agent paths cannot answer 2FA prompts).
+    void setKbdintPrompter(KbdintPrompter prompter);
+#endif
 
     [[nodiscard]] State state() const;
     [[nodiscard]] QString errorString() const;

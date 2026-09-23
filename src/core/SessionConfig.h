@@ -85,6 +85,44 @@ public:
     [[nodiscard]] bool autoReconnect() const;
     void setAutoReconnect(bool enabled);
 
+    // PH1-10: forward the local ssh-agent to the remote host (the remote
+    // can then sign auth requests against the local agent).
+    [[nodiscard]] bool forwardAgent() const;
+    void setForwardAgent(bool enabled);
+
+    // PH2-15: free-form tags (searchable) and favorite flag (pinned to the
+    // top of the session tree).
+    [[nodiscard]] QStringList tags() const;
+    void setTags(const QStringList &tags);
+    [[nodiscard]] bool favorite() const;
+    void setFavorite(bool favorite);
+
+    // Outbound proxy (PH1-02): "" or "none" = direct, "http" = HTTP CONNECT,
+    // "socks5" = SOCKS5 (RFC 1928 + user/pass auth RFC 1929).
+    [[nodiscard]] QString proxyType() const;
+    void setProxyType(const QString &type);
+    [[nodiscard]] QString proxyHost() const;
+    void setProxyHost(const QString &host);
+    [[nodiscard]] int proxyPort() const;
+    void setProxyPort(int port);
+    [[nodiscard]] QString proxyUsername() const;
+    void setProxyUsername(const QString &username);
+    [[nodiscard]] SecureString proxyPassword() const;
+    void setProxyPassword(const SecureString &password);
+
+    // Jump host / ProxyJump (PH1-03): connect THROUGH this SSH server via a
+    // direct-tcpip channel. Empty jumpHost = direct connection.
+    [[nodiscard]] QString jumpHost() const;
+    void setJumpHost(const QString &host);
+    [[nodiscard]] int jumpPort() const;
+    void setJumpPort(int port);
+    [[nodiscard]] QString jumpUsername() const;
+    void setJumpUsername(const QString &username);
+    [[nodiscard]] SecureString jumpPassword() const;
+    void setJumpPassword(const SecureString &password);
+    [[nodiscard]] QString jumpPrivateKeyPath() const;
+    void setJumpPrivateKeyPath(const QString &path);
+
     [[nodiscard]] bool isValid() const;
     [[nodiscard]] QString displayName() const;
 
@@ -110,6 +148,21 @@ private:
     int m_serialBaudRate = 115200;
     int m_keepAliveSeconds = 30;
     bool m_autoReconnect = false;
+    bool m_forwardAgent = false;
+    QStringList m_tags;      // PH2-15
+    bool m_favorite = false; // PH2-15
+    // Outbound proxy ("" = direct).
+    QString m_proxyType;
+    QString m_proxyHost;
+    int m_proxyPort = 0;
+    QString m_proxyUsername;
+    SecureString m_proxyPassword;
+    // Jump host ("" = direct).
+    QString m_jumpHost;
+    int m_jumpPort = 22;
+    QString m_jumpUsername;
+    SecureString m_jumpPassword;
+    QString m_jumpPrivateKeyPath;
 };
 
 } // namespace hssh

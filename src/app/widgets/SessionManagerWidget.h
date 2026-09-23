@@ -30,6 +30,13 @@ signals:
     void newFolderRequested();
     void editRequested(const QModelIndex &index);
     void removeRequested(const QModelIndex &index);
+    // Copy a session's configuration into a NEW session (credentials,
+    // proxy, auth included): the user gets a prefilled dialog to adjust
+    // name/host before saving.
+    void duplicateRequested(const QModelIndex &index);
+    // PH2-15: favorite pinning and tag editing (session nodes only).
+    void favoriteToggleRequested(const QModelIndex &index);
+    void tagsEditRequested(const QModelIndex &index);
 
 private:
     void onDoubleClicked(const QModelIndex &index);

@@ -2,6 +2,9 @@
 #define HSSH_CORE_KEYSTORE_H
 
 #include <QString>
+#include <QVector>
+
+#include <functional>
 
 struct ssh_key_struct;
 typedef struct ssh_key_struct *ssh_key;
@@ -14,6 +17,15 @@ namespace hssh {
 // to call from a worker thread.
 class KeyStore {
 public:
+    // One key in KeyStore::keysDir() as shown by listKeys().
+    struct KeyInfo {
+        QString fileName;
+        QString filePath;
+        QString type;               // "ssh-ed25519" etc. (empty when encrypted)
+        QString fingerprintSha256;  // "SHA256:..." (empty when encrypted)
+        bool encrypted = false;     // needs a passphrase to read
+    };
+
     enum class KeyType { Ed25519, Rsa2048, Rsa4096, Ecdsa256, Ecdsa384 };
     enum class KnownHostStatus {
         Unknown,     // not present in known_hosts
@@ -27,6 +39,33 @@ public:
     [[nodiscard]] static QString keysDir();
     // Path of the known_hosts file used by hssh.
     [[nodiscard]] static QString knownHostsPath();
+
+    // --- high-level API used by the Key Manager dialog (PH1-09) ---
+
+    // Scan keysDir() for private keys. Keys protected by a passphrase are
+    // listed with encrypted=true (type/fingerprint stay empty).
+    [[nodiscard]] static QVector<KeyInfo> listKeys();
+
+    // Generate a key pair into keysDir() under name (path separators are
+    // stripped, the name is uniquified when it collides). Also writes the
+    // matching <name>.pub in authorized_keys format.
+    static bool generateKey(KeyType type, const QString &name, const QString &passphrase,
+                            QString *filePath = nullptr, QString *errorMessage = nullptr);
+
+    // Copy an existing private key file into keysDir() after verifying it
+    // imports with the given passphrase (may be empty). The stored name is
+    // uniquified; filePath receives the destination.
+    static bool importKeyFile(const QString &sourcePath, const QString &passphrase,
+                              QString *filePath = nullptr, QString *errorMessage = nullptr);
+
+    // authorized_keys line ("ssh-ed25519 AAAA... comment") for a key file.
+    static bool exportPublicKey(const QString &filePath, const QString &passphrase,
+                                QString *authorizedLine, QString *errorMessage = nullptr);
+
+    // Remove a key file and its .pub sibling from keysDir().
+    static bool deleteKey(const QString &filePath, QString *errorMessage = nullptr);
+
+    // --- low-level pki helpers ---
 
     // Generate a key pair; privateKeyPath receives the private key file.
     // Returns false + errorMessage on failure. Passphrase may be empty.
@@ -51,6 +90,32 @@ public:
     static bool writeKnownHost(ssh_session session, QString *errorMessage = nullptr);
     // Remove all entries for a host (host may include port as host:port).
     static bool removeKnownHost(const QString &host, QString *errorMessage = nullptr);
+
+    // --- host key verification flow (PH2-12) ---
+    struct HostKeyInfo {
+        QString host;               // "host" or "host:port"
+        QString keyType;            // "ssh-ed25519" etc.
+        QString fingerprintSha256;  // "SHA256:..."
+        QString fingerprintMd5;     // "aa:bb:..."
+    };
+    enum class HostKeyDecision { Accept, Reject };
+    using HostKeyVerifier = std::function<HostKeyDecision(const HostKeyInfo &, bool changed)>;
+
+    // Verify the server key of a CONNECTED session against known_hosts.
+    // KnownOk passes; Unknown/Changed ask the verifier (a null verifier
+    // auto-accepts new keys but rejects changed ones — TOFU). Accepting a
+    // changed key removes the stale entry first. Reject fails with a
+    // descriptive error.
+    static bool verifyAndStoreHostKey(ssh_session session, const HostKeyVerifier &verifier,
+                                      QString *errorMessage = nullptr);
+
+    // One known_hosts line for the manager UI.
+    struct KnownHostEntry {
+        QString hosts;              // "host[,ip]" column
+        QString keyType;            // "ssh-ed25519" etc.
+        QString fingerprintSha256;  // "SHA256:..." of the key blob
+    };
+    [[nodiscard]] static QVector<KnownHostEntry> listKnownHosts();
 };
 
 } // namespace hssh

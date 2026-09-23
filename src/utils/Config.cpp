@@ -54,6 +54,14 @@ void seedDefaultKeys()
          {QStringLiteral("prompt"), QStringLiteral("allow"), QStringLiteral("deny")},
          QStringLiteral("Whether remote applications may read/write the local clipboard.")},
 
+        // Security
+        {QStringLiteral("security/hostKeyPolicy"), ConfigKeyType::Enum,
+         QStringLiteral("accept-new"), QStringLiteral("Security"),
+         QStringLiteral("Host key policy"),
+         {QStringLiteral("accept-new"), QStringLiteral("ask"), QStringLiteral("accept-all")},
+         QStringLiteral("accept-new trusts first use and rejects changed keys; ask prompts "
+                        "in the GUI; accept-all never verifies.")},
+
         // Network
         {QStringLiteral("net/proxyType"), ConfigKeyType::Enum, QStringLiteral("none"),
          QStringLiteral("Network"), QStringLiteral("Outbound proxy"),

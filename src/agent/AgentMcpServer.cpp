@@ -60,7 +60,7 @@ signals:
 class AgentMcpServer::Impl {
 public:
     QNetworkAccessManager nam;
-    QString baseUrl = QStringLiteral("http://127.0.0.1:8222");
+    QString baseUrl = QStringLiteral("http://127.0.0.1:8222"); // HSSH_AGENT_URL overrides (test instances)
     bool guiLaunching = false; // one auto-launch at a time
     QThread stdinThread;
     StdinReader *reader = nullptr;
@@ -70,6 +70,12 @@ AgentMcpServer::AgentMcpServer(QObject *parent)
     : QObject(parent)
     , d(std::make_unique<Impl>())
 {
+    // Test isolation: HSSH_AGENT_URL points the bridge at another agent
+    // (e.g. a scratch GUI on 8224) instead of the production 8222.
+    const QByteArray envUrl = qgetenv("HSSH_AGENT_URL");
+    if (!envUrl.isEmpty()) {
+        d->baseUrl = QString::fromUtf8(envUrl);
+    }
     d->reader = new StdinReader();
     d->reader->moveToThread(&d->stdinThread);
     connect(&d->stdinThread, &QThread::started, d->reader, &StdinReader::run);
@@ -530,6 +536,19 @@ void AgentMcpServer::handleMessage(const QByteArray &line)
                                         "binary), shell (base64 over exec channel — works "
                                         "without sftp-server), auto (sftp -> scp -> shell "
                                         "fallback)")}};
+        // Shared: return immediately after starting, poll ssh_transfer_status.
+        const auto waitProp = [](QJsonObject &props) {
+            props[QStringLiteral("wait")] =
+                QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")},
+                            {QStringLiteral("description"),
+                             QStringLiteral("true (default): the tool call returns when the "
+                                            "transfer finished. false: returns immediately "
+                                            "after starting — use this for large files that "
+                                            "would outlive your client's tool timeout, then "
+                                            "poll ssh_transfer_status")}};
+        };
+        waitProp(uploadProperties);
+
         QJsonObject uploadSchema;
         uploadSchema[QStringLiteral("type")] = QStringLiteral("object");
         uploadSchema[QStringLiteral("properties")] = uploadProperties;
@@ -541,7 +560,10 @@ void AgentMcpServer::handleMessage(const QByteArray &line)
                 QStringLiteral("Upload a local file to the session's host over a dedicated "
                                "connection (md5 content verification on by default). method: "
                                "sftp (default) / scp / shell (base64, works without "
-                               "sftp-server) / auto (fallback chain)"),
+                               "sftp-server) / auto (fallback chain). Large files: pass "
+                               "wait:false and poll ssh_transfer_status — a client-side tool "
+                               "timeout does NOT stop the transfer, it keeps running and the "
+                               "local/remote result is only visible via the status tool"),
                 uploadSchema);
 
         QJsonObject downloadProperties;
@@ -550,6 +572,7 @@ void AgentMcpServer::handleMessage(const QByteArray &line)
         downloadProperties[QStringLiteral("local_path")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
         downloadProperties[QStringLiteral("verify")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")}};
         downloadProperties[QStringLiteral("method")] = uploadProperties[QStringLiteral("method")];
+        waitProp(downloadProperties);
         QJsonObject downloadSchema;
         downloadSchema[QStringLiteral("type")] = QStringLiteral("object");
         downloadSchema[QStringLiteral("properties")] = downloadProperties;
@@ -561,8 +584,32 @@ void AgentMcpServer::handleMessage(const QByteArray &line)
                 QStringLiteral("Download a remote file from the session's host (md5 content "
                                "verification on by default; a mismatch retries once with a "
                                "full re-download over a fresh connection). method: sftp "
-                               "(default) / scp / shell / auto"),
+                               "(default) / scp / shell / auto. Bytes stream into "
+                               "<local>.part and are renamed atomically on success — a "
+                               "timeout/kill never leaves a half file under the real name. "
+                               "Large files: pass wait:false and poll ssh_transfer_status; "
+                               "a client-side tool timeout does NOT stop the transfer"),
                 downloadSchema);
+
+        QJsonObject transferQueryProperties;
+        sessionProp(transferQueryProperties);
+        QJsonObject transferQuerySchema;
+        transferQuerySchema[QStringLiteral("type")] = QStringLiteral("object");
+        transferQuerySchema[QStringLiteral("properties")] = transferQueryProperties;
+        transferQuerySchema[QStringLiteral("required")] = QJsonArray{QStringLiteral("session")};
+
+        addTool(QStringLiteral("ssh_transfer_status"),
+                QStringLiteral("Progress of the transfer running on the session's tab: "
+                               "{active, direction, method, bytesDone, bytesTotal, elapsedMs}. "
+                               "active:false means no transfer (the last one finished — its "
+                               "result went to the audit log; on success the file is at its "
+                               "final path with md5 verified)"),
+                transferQuerySchema);
+
+        addTool(QStringLiteral("ssh_transfer_cancel"),
+                QStringLiteral("Cancel the transfer running on the session's tab (keeps the "
+                               "local .part file so an sftp retry can resume)"),
+                transferQuerySchema);
 
         QJsonObject sendProperties;
         sessionProp(sendProperties);
@@ -656,7 +703,9 @@ void AgentMcpServer::handleToolCall(const QString &name, const QJsonObject &argu
         {QStringLiteral("ssh_exec"), true},     {QStringLiteral("ssh_disconnect"), true},
         {QStringLiteral("ssh_sudo"), true},     {QStringLiteral("ssh_upload"), true},
         {QStringLiteral("ssh_download"), true}, {QStringLiteral("ssh_send"), true},
-        {QStringLiteral("ssh_read"), true},
+        {QStringLiteral("ssh_read"), true},     {QStringLiteral("ssh_transfer_status"), true},
+        {QStringLiteral("ssh_transfer_cancel"), true},
+        {QStringLiteral("get_public_key"), true},
     };
     if (!known.contains(name)) {
         respondErrorId(rpcId, -32602, QStringLiteral("Unknown tool: ") + name);
@@ -926,25 +975,101 @@ void AgentMcpServer::handleBridgedTool(const QString &name, const QJsonObject &a
             if (!transferMethod.isEmpty()) {
                 body[QStringLiteral("method")] = transferMethod;
             }
-            // Big files take as long as they take; the REST side answers at
-            // completion and aborts on client disconnect.
+            // wait:false -> start the transfer and return immediately; the
+            // caller then polls ssh_transfer_status. The default (wait) holds
+            // this call until completion — fine unless the MCP client imposes
+            // a shorter tool timeout, in which case the transfer keeps
+            // running server-side anyway (2026-09-18 zombie lesson).
+            const bool wait = arguments.value(QStringLiteral("wait")).toBool(true);
+            const int httpTimeout = wait ? 24 * 3600 * 1000 : 30000;
+            if (!wait) {
+                body[QStringLiteral("async")] = true;
+            }
             restCall("POST", QStringLiteral("/api/v1/tabs/%1/%2").arg(encoded, isUpload ? QStringLiteral("upload")
                                                                                         : QStringLiteral("download")),
-                     body, 24 * 3600 * 1000, [=, this](int status, const QJsonObject &transferBody) {
+                     body, httpTimeout, [=, this](int status, const QJsonObject &transferBody) {
                 if (status != 200) {
                     respondRestError(rpcId, status, transferBody);
                     return;
                 }
-                AgentAudit::log(AgentAudit::Source::Mcp, name, detail, QStringLiteral("ok"));
-                QJsonArray content;
-                content.append(makeTextContent(QStringLiteral("transferred: %1")
-                                                   .arg(transferBody.value(QStringLiteral("path")).toString())));
                 QJsonObject result;
-                result[QStringLiteral("content")] = content;
-                result[QStringLiteral("path")] = transferBody.value(QStringLiteral("path"));
-                if (!transferBody.value(QStringLiteral("message")).toString().isEmpty()) {
-                    result[QStringLiteral("message")] = transferBody.value(QStringLiteral("message"));
+                QJsonArray content;
+                if (transferBody.value(QStringLiteral("async")).toBool()) {
+                    AgentAudit::log(AgentAudit::Source::Mcp, name, detail,
+                                    QStringLiteral("started async"));
+                    result[QStringLiteral("started")] = true;
+                    result[QStringLiteral("method")] = transferBody.value(QStringLiteral("method"));
+                    result[QStringLiteral("direction")] =
+                        transferBody.value(QStringLiteral("direction"));
+                    result[QStringLiteral("target")] = transferBody.value(QStringLiteral("target"));
+                    content.append(makeTextContent(
+                        QStringLiteral("transfer started (%1 %2, method %3) — poll "
+                                       "ssh_transfer_status; the file lands at its final "
+                                       "path only after md5-verified success")
+                            .arg(transferBody.value(QStringLiteral("direction")).toString(),
+                                 transferBody.value(QStringLiteral("target")).toString(),
+                                 transferBody.value(QStringLiteral("method")).toString())));
+                } else {
+                    AgentAudit::log(AgentAudit::Source::Mcp, name, detail, QStringLiteral("ok"));
+                    result[QStringLiteral("path")] = transferBody.value(QStringLiteral("path"));
+                    if (!transferBody.value(QStringLiteral("message")).toString().isEmpty()) {
+                        result[QStringLiteral("message")] =
+                            transferBody.value(QStringLiteral("message"));
+                    }
+                    content.append(makeTextContent(
+                        QStringLiteral("transferred: %1")
+                            .arg(transferBody.value(QStringLiteral("path")).toString())));
                 }
+                result[QStringLiteral("content")] = content;
+                respondId(rpcId, result);
+            });
+            return;
+        }
+
+        if (name == QStringLiteral("ssh_transfer_status")) {
+            restCall("GET", QStringLiteral("/api/v1/tabs/%1/transfer").arg(encoded), {}, 10000,
+                     [=, this](int status, const QJsonObject &st) {
+                if (status != 200) {
+                    respondRestError(rpcId, status, st);
+                    return;
+                }
+                QJsonObject result = st;
+                QString text;
+                if (!st.value(QStringLiteral("active")).toBool()) {
+                    text = QStringLiteral("no transfer running on this tab "
+                                          "(the last one finished; success = file at final path)");
+                } else {
+                    const qint64 done = st.value(QStringLiteral("bytesDone")).toInteger();
+                    const qint64 total = st.value(QStringLiteral("bytesTotal")).toInteger();
+                    const qint64 elapsed = st.value(QStringLiteral("elapsedMs")).toInteger();
+                    text = QStringLiteral("%1 via %2: %3 of %4 bytes (%5 s elapsed)")
+                               .arg(st.value(QStringLiteral("direction")).toString(),
+                                    st.value(QStringLiteral("method")).toString())
+                               .arg(done).arg(total).arg(elapsed / 1000);
+                }
+                QJsonArray content;
+                content.append(makeTextContent(text));
+                result[QStringLiteral("content")] = content;
+                respondId(rpcId, result);
+            });
+            return;
+        }
+
+        if (name == QStringLiteral("ssh_transfer_cancel")) {
+            restCall("DELETE", QStringLiteral("/api/v1/tabs/%1/transfer").arg(encoded), {}, 10000,
+                     [=, this](int status, const QJsonObject &del) {
+                if (status != 200) {
+                    respondRestError(rpcId, status, del);
+                    return;
+                }
+                AgentAudit::log(AgentAudit::Source::Mcp, name, detail, QStringLiteral("ok"));
+                QJsonObject result;
+                result[QStringLiteral("cancelled")] = true;
+                QJsonArray content;
+                content.append(makeTextContent(
+                    QStringLiteral("transfer cancelled; the local .part file is kept "
+                                   "for resume (sftp method)")));
+                result[QStringLiteral("content")] = content;
                 respondId(rpcId, result);
             });
             return;

@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Test)
+﻿find_package(Qt6 REQUIRED COMPONENTS Test)
 if(NOT Qt6_FOUND)
     find_package(Qt5 REQUIRED COMPONENTS Test)
 endif()
@@ -10,6 +10,11 @@ set(COMMON_SOURCES
     ../src/core/SessionConfig.cpp
     ../src/core/SessionModel.cpp
     ../src/core/SessionRepository.cpp
+    ../src/core/KeyStore.cpp
+    ../src/app/dialogs/KeyManagerDialog.cpp
+    ../src/app/dialogs/SessionLogViewer.cpp
+    ../src/app/widgets/CommandPalette.cpp
+    ../src/app/widgets/TerminalOutlineWidget.cpp
     ../src/core/PortForward.cpp
     ../src/core/SftpSession.cpp
     ../src/core/ChannelCopySession.cpp
@@ -22,6 +27,8 @@ set(COMMON_SOURCES
     ../src/terminal/LocalShellProcess.cpp
     ../src/terminal/SshShellProcess.cpp
     ../src/terminal/TerminalSession.cpp
+    ../src/terminal/SerialShellProcess.cpp
+    ../src/terminal/ZModemEngine.cpp
     ../src/terminal/TerminalWidget.cpp
     ../src/utils/TextDiff.cpp
 )
@@ -99,6 +106,30 @@ target_include_directories(test_config PRIVATE ${COMMON_INCLUDES})
 target_link_libraries(test_config PRIVATE ${COMMON_LIBS})
 add_test(NAME test_config COMMAND test_config)
 set_tests_properties(test_config PROPERTIES ENVIRONMENT "${TEST_ENV}")
+
+add_executable(test_keystore test_keystore.cpp ${COMMON_SOURCES})
+target_include_directories(test_keystore PRIVATE ${COMMON_INCLUDES})
+target_link_libraries(test_keystore PRIVATE ${COMMON_LIBS})
+add_test(NAME test_keystore COMMAND test_keystore)
+set_tests_properties(test_keystore PROPERTIES ENVIRONMENT "${TEST_ENV}")
+
+add_executable(test_zmodem test_zmodem.cpp ${COMMON_SOURCES})
+target_include_directories(test_zmodem PRIVATE ${COMMON_INCLUDES})
+target_link_libraries(test_zmodem PRIVATE ${COMMON_LIBS})
+add_test(NAME test_zmodem COMMAND test_zmodem)
+set_tests_properties(test_zmodem PROPERTIES ENVIRONMENT "${TEST_ENV}")
+
+add_executable(test_palette test_palette.cpp ${COMMON_SOURCES})
+target_include_directories(test_palette PRIVATE ${COMMON_INCLUDES})
+target_link_libraries(test_palette PRIVATE ${COMMON_LIBS})
+add_test(NAME test_palette COMMAND test_palette)
+set_tests_properties(test_palette PROPERTIES ENVIRONMENT "${TEST_ENV}")
+
+add_executable(test_sessionlog test_sessionlog.cpp ${COMMON_SOURCES})
+target_include_directories(test_sessionlog PRIVATE ${COMMON_INCLUDES})
+target_link_libraries(test_sessionlog PRIVATE ${COMMON_LIBS})
+add_test(NAME test_sessionlog COMMAND test_sessionlog)
+set_tests_properties(test_sessionlog PROPERTIES ENVIRONMENT "${TEST_ENV}")
 
 add_executable(test_session_model test_session_model.cpp ${COMMON_SOURCES})
 target_include_directories(test_session_model PRIVATE ${COMMON_INCLUDES})

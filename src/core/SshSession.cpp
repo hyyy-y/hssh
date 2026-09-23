@@ -2,6 +2,7 @@
 
 #include "core/PortForward.h"
 #include "core/SshConnect.h"
+#include "utils/Config.h"
 #include "utils/Crypto.h"
 
 #include <QDebug>
@@ -16,6 +17,7 @@
 
 #ifdef HSSH_HAS_LIBSSH
 #include <libssh/libssh.h>
+#include <libssh/callbacks.h>
 #endif
 
 namespace hssh {
@@ -31,10 +33,12 @@ class SshShellReader : public QObject {
     Q_OBJECT
 
 public:
-    SshShellReader(ssh_channel channel, QMutex *sessionMutex, QObject *parent = nullptr)
+    SshShellReader(ssh_channel channel, QMutex *sessionMutex,
+                   QByteArray *writeQueue, QObject *parent = nullptr)
         : QObject(parent)
         , m_channel(channel)
         , m_mutex(sessionMutex)
+        , m_writeQueue(writeQueue)
     {
     }
 
@@ -53,7 +57,7 @@ public slots:
         }
     }
 
-private slots:
+    private slots:
     void poll()
     {
         if (!m_channel || !m_mutex) {
@@ -79,6 +83,25 @@ private slots:
             return;
         }
 
+        // Drain pending shell input. The remote-window gate makes the
+        // (blocking) ssh_channel_write call non-waiting: we only write as
+        // many bytes as the peer's window currently accepts, so a congested
+        // channel just retries on the next 10 ms tick instead of parking
+        // this thread (or worse, the GUI thread) inside libssh.
+        if (m_writeQueue && !m_writeQueue->isEmpty()) {
+            const uint32_t window = ssh_channel_window_size(m_channel);
+            if (window > 0) {
+                const int chunk = qMin<qsizetype>(m_writeQueue->size(),
+                                                   qMin<qint64>(window, 32 * 1024));
+                const int written = ssh_channel_write(
+                    m_channel, m_writeQueue->constData(), static_cast<uint32_t>(chunk));
+                if (written > 0) {
+                    m_writeQueue->remove(0, written);
+                }
+                // written <= 0: channel error — the read path above reports it.
+            }
+        }
+
         if (ssh_channel_is_eof(m_channel)) {
             const int exitCode = ssh_channel_get_exit_status(m_channel);
             emit finished(exitCode);
@@ -86,14 +109,15 @@ private slots:
         }
     }
 
-signals:
+    signals:
     void dataReceived(const QByteArray &data);
     void finished(int exitCode);
     void readError();
 
-private:
+    private:
     ssh_channel m_channel = nullptr;
     QMutex *m_mutex = nullptr;
+    QByteArray *m_writeQueue = nullptr;
     QTimer *m_timer = nullptr;
 };
 
@@ -169,6 +193,11 @@ public:
     SshKeepAliveProbe *probe = nullptr;
     QThread probeThread;
     QMutex sessionMutex;
+    // Pending shell input, drained by the reader thread (see writeShell):
+    // writes happen on the reader thread with a remote-window check so a
+    // congested channel (e.g. a parallel bulk transfer) can never block the
+    // GUI thread on ssh_channel_write.
+    QByteArray shellWriteQueue;
     SshSession::State state = SshSession::State::Disconnected;
     QString errorString;
     SessionConfig config;
@@ -183,6 +212,23 @@ public:
     {
         cleanup();
     }
+
+    // PH1-10: agent forwarding. The remote opens "auth-agent@openssh.com"
+    // channels back to us; each gets a relay thread shuttling bytes between
+    // the channel and the local agent (Windows OpenSSH named pipe, or
+    // SSH_AUTH_SOCK on POSIX).
+    struct AgentRelay {
+        ssh_channel channel = nullptr;
+#ifdef Q_OS_WIN
+        void *pipe = nullptr; // HANDLE
+#else
+        int pipe = -1;
+#endif
+        std::thread thread;
+    };
+
+    ssh_channel startAgentRelay();
+    ssh_callbacks_struct agentCallbacks{};
 
     void cleanup()
     {
@@ -234,8 +280,12 @@ class SshConnectWorker : public QObject {
     Q_OBJECT
 
 public:
-    explicit SshConnectWorker(const SessionConfig &config)
+    explicit SshConnectWorker(const SessionConfig &config,
+                              KeyStore::HostKeyVerifier hostKeyVerifier,
+                              KbdintPrompter kbdintPrompter)
         : m_config(config)
+        , m_hostKeyVerifier(std::move(hostKeyVerifier))
+        , m_kbdintPrompter(std::move(kbdintPrompter))
     {
     }
 
@@ -252,11 +302,12 @@ public:
     // Owned by this worker until the GUI thread adopts it from the done slot.
     ssh_session session = nullptr;
 
-public slots:
+    public slots:
     void run()
     {
         QString error;
-        ssh_session s = sshConnectAndAuthenticate(m_config, &error);
+        ssh_session s = sshConnectAndAuthenticate(m_config, &error, 0, m_hostKeyVerifier,
+                                                  m_kbdintPrompter);
         if (!s) {
             emit done(SSH_ERROR, error);
             return;
@@ -270,6 +321,8 @@ signals:
 
 private:
     SessionConfig m_config;
+    KeyStore::HostKeyVerifier m_hostKeyVerifier;
+    KbdintPrompter m_kbdintPrompter;
 };
 
 #endif // HSSH_HAS_LIBSSH
@@ -399,10 +452,197 @@ public:
     int reconnectAttempts = 0;
     QTimer *reconnectTimer = nullptr;
     bool userDisconnect = false;
+    // PH2-12: optional interactive host-key verifier (GUI installs one).
+    KeyStore::HostKeyVerifier hostKeyVerifier;
+    // PH2-13: optional interactive 2FA (kbdint) prompter (GUI installs one).
+    KbdintPrompter kbdintPrompter;
 #else
     std::unique_ptr<QProcessImpl> process;
 #endif
 };
+
+// ---------------------------------------------------------------------------
+// PH1-10: ssh-agent forwarding relay.
+// ---------------------------------------------------------------------------
+
+#ifdef Q_OS_WIN
+namespace {
+// Connects to the Windows OpenSSH agent named pipe (the "ssh-agent"
+// service must be running). Returns nullptr on failure.
+void *openLocalAgentPipe()
+{
+    HANDLE h = CreateFileW(L"\\\\.\\pipe\\openssh-ssh-agent",
+                           GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                           OPEN_EXISTING, 0, nullptr);
+    return (h == INVALID_HANDLE_VALUE) ? nullptr : h;
+}
+} // namespace
+#else
+namespace {
+int openLocalAgentPipe()
+{
+    const char *sock = getenv("SSH_AUTH_SOCK");
+    if (!sock || !*sock) {
+        return -1;
+    }
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, sock, sizeof(addr.sun_path) - 1);
+    if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+} // namespace
+#endif
+
+// One relay thread per forwarded agent channel: shuttles bytes between the
+// SSH channel (guarded by the session mutex — the shell reader shares the
+// session) and the local agent pipe.
+void agentRelayRun(LibSshImpl::AgentRelay *relay, QMutex *sessionMutex)
+{
+    char buffer[32 * 1024];
+    bool alive = true;
+    while (alive) {
+        // Local agent pipe -> channel.
+#ifdef Q_OS_WIN
+        DWORD available = 0;
+        HANDLE pipe = static_cast<HANDLE>(relay->pipe);
+        if (PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr) && available > 0) {
+            DWORD n = 0;
+            const DWORD want = available < sizeof(buffer) ? available
+                                                          : static_cast<DWORD>(sizeof(buffer));
+            if (ReadFile(pipe, buffer, want, &n, nullptr) && n > 0) {
+                DWORD off = 0;
+                while (off < n) {
+                    QMutexLocker locker(sessionMutex);
+                    const int w = ssh_channel_write(relay->channel, buffer + off, n - off);
+                    if (w <= 0) {
+                        alive = false;
+                        break;
+                    }
+                    off += w;
+                }
+            } else {
+                alive = false;
+            }
+        }
+#else
+        pollfd pfd{relay->pipe, POLLIN, 0};
+        if (::poll(&pfd, 1, 5) > 0 && (pfd.revents & POLLIN)) {
+            const ssize_t n = ::read(relay->pipe, buffer, sizeof(buffer));
+            if (n > 0) {
+                ssize_t off = 0;
+                while (off < n) {
+                    QMutexLocker locker(sessionMutex);
+                    const int w = ssh_channel_write(relay->channel, buffer + off,
+                                                    static_cast<uint32_t>(n - off));
+                    if (w <= 0) {
+                        alive = false;
+                        break;
+                    }
+                    off += w;
+                }
+            } else {
+                alive = false;
+            }
+        }
+#endif
+        if (!alive) {
+            break;
+        }
+        // Channel -> local agent pipe (nonblocking drain under the lock).
+        {
+            QMutexLocker locker(sessionMutex);
+            const int n = ssh_channel_read_nonblocking(relay->channel, buffer,
+                                                       sizeof(buffer), 0);
+            if (n < 0) {
+                alive = false;
+            } else if (n > 0) {
+#ifdef Q_OS_WIN
+                DWORD written = 0;
+                if (!WriteFile(static_cast<HANDLE>(relay->pipe), buffer, n, &written, nullptr)
+                    || written != static_cast<DWORD>(n)) {
+                    alive = false;
+                }
+#else
+                if (::write(relay->pipe, buffer, static_cast<size_t>(n)) != n) {
+                    alive = false;
+                }
+#endif
+            } else if (ssh_channel_is_eof(relay->channel)
+                       || ssh_channel_is_closed(relay->channel)) {
+                alive = false;
+            }
+        }
+#ifdef Q_OS_WIN
+        Sleep(5);
+#else
+        usleep(5000);
+#endif
+    }
+#ifdef Q_OS_WIN
+    CloseHandle(static_cast<HANDLE>(relay->pipe));
+#else
+    ::close(relay->pipe);
+#endif
+    {
+        QMutexLocker locker(sessionMutex);
+        ssh_channel_close(relay->channel);
+        ssh_channel_free(relay->channel);
+    }
+    delete relay;
+}
+
+// Session callback: the remote opens an agent channel back to us.
+ssh_channel agentChannelOpenCallback(ssh_session, void *user)
+{
+    auto *impl = static_cast<LibSshImpl *>(user);
+    if (!impl) {
+        return nullptr;
+    }
+    return impl->startAgentRelay();
+}
+
+ssh_channel LibSshImpl::startAgentRelay()
+{
+    void *pipeWin = nullptr;
+    int pipeUnix = -1;
+#ifdef Q_OS_WIN
+    pipeWin = openLocalAgentPipe();
+    if (!pipeWin) {
+        return nullptr; // no local agent (service not running): refuse
+    }
+#else
+    pipeUnix = openLocalAgentPipe();
+    if (pipeUnix < 0) {
+        return nullptr;
+    }
+#endif
+    ssh_channel channel = ssh_channel_new(session);
+    if (!channel) {
+#ifdef Q_OS_WIN
+        CloseHandle(static_cast<HANDLE>(pipeWin));
+#else
+        ::close(pipeUnix);
+#endif
+        return nullptr;
+    }
+    auto *relay = new AgentRelay();
+    relay->channel = channel;
+#ifdef Q_OS_WIN
+    relay->pipe = pipeWin;
+#else
+    relay->pipe = pipeUnix;
+#endif
+    std::thread(agentRelayRun, relay, &sessionMutex).detach();
+    return channel;
+}
 
 SshSession::SshSession(QObject *parent)
     : QObject(parent)
@@ -447,6 +687,24 @@ SshSession::~SshSession()
         d->connectThread = nullptr;
         d->connectWorker = nullptr;
     }
+#endif
+}
+
+void SshSession::setHostKeyVerifier(KeyStore::HostKeyVerifier verifier)
+{
+#ifdef HSSH_HAS_LIBSSH
+    d->hostKeyVerifier = std::move(verifier);
+#else
+    Q_UNUSED(verifier)
+#endif
+}
+
+void SshSession::setKbdintPrompter(KbdintPrompter prompter)
+{
+#ifdef HSSH_HAS_LIBSSH
+    d->kbdintPrompter = std::move(prompter);
+#else
+    Q_UNUSED(prompter)
 #endif
 }
 
@@ -592,7 +850,23 @@ void SshSession::connectToHostLibSsh()
 
     // Connect + authenticate on a worker thread; both are blocking network
     // operations and would freeze the GUI for the duration of the timeout.
-    auto *worker = new SshConnectWorker(d->config);
+    // PH2-12: resolve the host-key policy on THIS (GUI) thread — reading
+    // QSettings from a worker is not safe — then hand the decision lambda
+    // to the worker.
+    KeyStore::HostKeyVerifier verifier = d->hostKeyVerifier;
+    if (!verifier) {
+        const QString policy = Config::instance().stringValue(
+            QStringLiteral("security/hostKeyPolicy"), QStringLiteral("accept-new"));
+        verifier = [policy](const KeyStore::HostKeyInfo &, bool changed) {
+            if (policy == QLatin1String("accept-all")) {
+                return KeyStore::HostKeyDecision::Accept;
+            }
+            // accept-new / ask-without-UI: trust first use, reject changes.
+            return changed ? KeyStore::HostKeyDecision::Reject
+                           : KeyStore::HostKeyDecision::Accept;
+        };
+    }
+    auto *worker = new SshConnectWorker(d->config, verifier, d->kbdintPrompter);
     auto *thread = new QThread(this);
     d->connectThread = thread;
     d->connectWorker = worker;
@@ -640,6 +914,16 @@ void SshSession::onConnectWorkerDone(int rc, const QString &message)
     }
 
     d->ssh->session = session;
+    // PH1-10: accept agent channels the remote opens back (forwarding only
+    // does anything once the shell also sends the request below).
+    {
+        QMutexLocker locker(&d->ssh->sessionMutex);
+        ssh_callbacks_init(&d->ssh->agentCallbacks);
+        d->ssh->agentCallbacks.userdata = d->ssh.get();
+        d->ssh->agentCallbacks.channel_open_request_auth_agent_function =
+            agentChannelOpenCallback;
+        ssh_set_callbacks(session, &d->ssh->agentCallbacks);
+    }
     openShellChannelLibSsh();
 }
 
@@ -694,10 +978,18 @@ void SshSession::openShellChannelLibSsh()
     emit stateChanged(State::Connected);
     emit connected();
 
+    // PH1-10: ask the remote to forward our agent (best effort — a missing
+    // local agent or an sshd without support is not an error).
+    if (d->ssh->config.forwardAgent()) {
+        QMutexLocker locker(&d->ssh->sessionMutex);
+        ssh_channel_request_auth_agent(d->ssh->shellChannel);
+    }
+
     d->reconnectAttempts = 0;
     startKeepAliveLibSsh();
 
-    d->ssh->reader = new SshShellReader(d->ssh->shellChannel, &d->ssh->sessionMutex);
+    d->ssh->reader = new SshShellReader(d->ssh->shellChannel, &d->ssh->sessionMutex,
+                                        &d->ssh->shellWriteQueue);
     d->ssh->reader->moveToThread(&d->ssh->readerThread);
     connect(d->ssh->reader, &SshShellReader::dataReceived, this, [this](const QByteArray &data) {
         emit dataReceived(data);
@@ -854,8 +1146,13 @@ void SshSession::writeShellLibSsh(const QByteArray &data)
     if (d->state != State::Connected || !d->ssh->shellChannel) {
         return;
     }
+    // Queue only — NEVER call ssh_channel_write from the caller's thread:
+    // with a congested channel window the blocking write would freeze the
+    // GUI thread for as long as the peer's window stays full (observed as a
+    // 30 s+ agent freeze during a parallel bulk download, 2026-09-18).
+    // The reader thread drains the queue with a remote-window gate.
     QMutexLocker locker(&d->ssh->sessionMutex);
-    ssh_channel_write(d->ssh->shellChannel, data.constData(), static_cast<uint32_t>(data.size()));
+    d->ssh->shellWriteQueue.append(data);
 }
 
 void SshSession::setShellSizeLibSsh(int columns, int rows)

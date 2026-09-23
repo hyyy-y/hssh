@@ -82,8 +82,7 @@ public:
         if (index < 0 || index >= entries.size()) {
             return false;
         }
-        rawInputs.append(data);
-        QStringList &buf = buffers[index];
+        rawInputs.append(data);        QStringList &buf = buffers[index];
         static const QRegularExpression beginRe(
             QStringLiteral("^echo __HSSH_EXEC_B_(\\w+)__$"));
         const QStringList inputLines = data.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
@@ -165,6 +164,15 @@ public:
         return true;
     }
     int reconnectCalls = 0; // test: reconnect route must reach the tab
+    QStringList zmodemSends; // test: zsend route must reach the tab
+    bool zmodemSendToTab(int index, const QString &localPath) override
+    {
+        if (index < 0 || index >= entries.size()) {
+            return false;
+        }
+        zmodemSends.append(localPath);
+        return true;
+    }
     bool reconnectTab(int index) override
     {
         if (index < 0 || index >= entries.size()) {
@@ -206,6 +214,15 @@ public:
     }
     bool sudoExec(int, const QString &, const QString &, bool, int,
                   QString *, bool *, int *, QString *) override { return false; }
+    // Async sudo: synchronous rejection (test surface has no dialogs).
+    void sudoAsync(int, const QString &, const QString &, bool, int,
+                   const AgentTabsInterface::SudoAsyncCallback &cb) override
+    {
+        AgentTabsInterface::SudoAsyncResult r;
+        r.confirmed = false;
+        r.reason = QStringLiteral("user_rejected");
+        cb(r);
+    }
 };
 
 struct HttpResult {
@@ -276,6 +293,8 @@ private slots:
     void v2Wrapping();
     void headlessRoutesGone();
     void tabTransferValidation();
+    void transferStatusAndCancel();
+    void sudoAsyncRejected();
     void adHocTabOpen();
     void visibleExec();
     void visibleExecTimeoutAndBusy();
@@ -486,6 +505,111 @@ void TestAgentHttp::tabTransferValidation()
                     QStringLiteral("/api/v1/tabs/no-such-board/upload"),
                     QJsonObject{{QStringLiteral("localPath"), QStringLiteral("a")},
                                 {QStringLiteral("remotePath"), QStringLiteral("b")}});
+    QCOMPARE(r.status, 404);
+}
+
+void TestAgentHttp::transferStatusAndCancel()
+{
+    // No transfer: status reports inactive, cancel 404s.
+    HttpResult r = httpRequest(m_server->port(), "GET",
+                               QStringLiteral("/api/v1/tabs/board-b:1/transfer"));
+    QCOMPARE(r.status, 200);
+    QCOMPARE(QJsonDocument::fromJson(r.body).object()
+                 .value(QStringLiteral("active")).toBool(), false);
+    r = httpRequest(m_server->port(), "DELETE",
+                    QStringLiteral("/api/v1/tabs/board-b:1/transfer"));
+    QCOMPARE(r.status, 404);
+
+    // A black-hole host: the worker sits in its 10 s connect timeout, so
+    // the status window is stable (no fast "unreachable" failure).
+    const HttpResult open = httpRequest(m_server->port(), "POST",
+                                        QStringLiteral("/api/v1/tabs"),
+                                        QJsonObject{{QStringLiteral("host"), QStringLiteral("10.255.255.1")},
+                                                    {QStringLiteral("username"), QStringLiteral("u")}});
+    QCOMPARE(open.status, 200);
+    const QString blackRef = QJsonDocument::fromJson(open.body).object()
+                                 .value(QStringLiteral("ref")).toString();
+    QCOMPARE(blackRef, QStringLiteral("10.255.255.1"));
+
+    // async:true starts the transfer and answers immediately.
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/10.255.255.1/upload"),
+                    QJsonObject{{QStringLiteral("localPath"), QStringLiteral("a")},
+                                {QStringLiteral("remotePath"), QStringLiteral("b")},
+                                {QStringLiteral("async"), true}});
+    QCOMPARE(r.status, 200);
+    QJsonObject body = QJsonDocument::fromJson(r.body).object();
+    QCOMPARE(body.value(QStringLiteral("started")).toBool(), true);
+    QVERIFY(body.contains(QStringLiteral("statusPath")));
+
+    // The transfer is now visible in the status endpoint.
+    r = httpRequest(m_server->port(), "GET",
+                    QStringLiteral("/api/v1/tabs/10.255.255.1/transfer"));
+    QCOMPARE(r.status, 200);
+    body = QJsonDocument::fromJson(r.body).object();
+    QCOMPARE(body.value(QStringLiteral("active")).toBool(), true);
+    QCOMPARE(body.value(QStringLiteral("direction")).toString(), QStringLiteral("upload"));
+
+    // Cancel releases the tab again. The worker may sit in its 10 s connect
+    // timeout when cancelled (the flag is checked in the transfer loop), so
+    // poll for the release instead of a fixed wait.
+    r = httpRequest(m_server->port(), "DELETE",
+                    QStringLiteral("/api/v1/tabs/10.255.255.1/transfer"));
+    QCOMPARE(r.status, 200);
+    QCOMPARE(QJsonDocument::fromJson(r.body).object()
+                 .value(QStringLiteral("cancelled")).toBool(), true);
+    bool released = false;
+    for (int i = 0; i < 40 && !released; ++i) {
+        QTest::qWait(500);
+        const HttpResult s = httpRequest(m_server->port(), "GET",
+                                         QStringLiteral("/api/v1/tabs/10.255.255.1/transfer"));
+        released = !QJsonDocument::fromJson(s.body).object()
+                        .value(QStringLiteral("active")).toBool();
+    }
+    QVERIFY2(released, "transfer lock not released after cancel");
+
+    // The tab accepts a new transfer afterwards (no stuck 409) — and clean
+    // up the black-hole tab so later tests see the original tab list.
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/10.255.255.1/upload"),
+                    QJsonObject{{QStringLiteral("localPath"), QStringLiteral("a")},
+                                {QStringLiteral("remotePath"), QStringLiteral("b")},
+                                {QStringLiteral("async"), true}});
+    QCOMPARE(r.status, 200);
+    httpRequest(m_server->port(), "DELETE",
+                QStringLiteral("/api/v1/tabs/10.255.255.1/transfer"));
+    for (int i = 0; i < 40; ++i) {
+        QTest::qWait(500);
+        const HttpResult s = httpRequest(m_server->port(), "GET",
+                                         QStringLiteral("/api/v1/tabs/10.255.255.1/transfer"));
+        if (!QJsonDocument::fromJson(s.body).object()
+                 .value(QStringLiteral("active")).toBool()) {
+            break;
+        }
+    }
+    httpRequest(m_server->port(), "DELETE",
+                QStringLiteral("/api/v1/tabs/10.255.255.1"));
+}
+
+void TestAgentHttp::sudoAsyncRejected()
+{
+    // The async sudo path: FakeTabs rejects synchronously -> 403 with a
+    // reason code, and the response carries no executed/exitCode fields.
+    HttpResult r = httpRequest(m_server->port(), "POST",
+                               QStringLiteral("/api/v1/tabs/board-b:1/sudo"),
+                               QJsonObject{{QStringLiteral("command"), QStringLiteral("true")}});
+    QCOMPARE(r.status, 403);
+    const QJsonObject body = QJsonDocument::fromJson(r.body).object();
+    QCOMPARE(body.value(QStringLiteral("reason")).toString(), QStringLiteral("user_rejected"));
+    QVERIFY(!body.contains(QStringLiteral("executed")));
+
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/board-b:1/sudo"),
+                    QJsonObject{{QStringLiteral("command"), QString()}});
+    QCOMPARE(r.status, 400);
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/no-such-tab/sudo"),
+                    QJsonObject{{QStringLiteral("command"), QStringLiteral("true")}});
     QCOMPARE(r.status, 404);
 }
 
@@ -707,10 +831,20 @@ void TestAgentHttp::reconnectRoute()
 void TestAgentHttp::execResetOption()
 {
     const int before = m_tabs.rawInputs.size();
-    const HttpResult r = httpRequest(m_server->port(), "POST",
-                                     QStringLiteral("/api/v1/tabs/board-b:1/exec"),
-                                     QJsonObject{{QStringLiteral("command"), QStringLiteral("echo hello")},
-                                                 {QStringLiteral("reset"), true}});
+    // ZMODEM send route: missing path -> 400, valid -> reaches the tab.
+    HttpResult r = httpRequest(m_server->port(), "POST",
+                               QStringLiteral("/api/v1/tabs/board-b:1/zsend"),
+                               QJsonObject{{QStringLiteral("localPath"), QString()}});
+    QCOMPARE(r.status, 400);
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/board-b:1/zsend"),
+                    QJsonObject{{QStringLiteral("localPath"), QStringLiteral("C:/t.bin")}});
+    QCOMPARE(r.status, 200);
+    QCOMPARE(m_tabs.zmodemSends, QStringList{QStringLiteral("C:/t.bin")});
+    r = httpRequest(m_server->port(), "POST",
+                    QStringLiteral("/api/v1/tabs/board-b:1/exec"),
+                    QJsonObject{{QStringLiteral("command"), QStringLiteral("echo hello")},
+                                {QStringLiteral("reset"), true}});
     QCOMPARE(r.status, 200);
     // Reset typed Ctrl+C first, then (~400 ms later) the marker sequence
     // with its leading bare newline.

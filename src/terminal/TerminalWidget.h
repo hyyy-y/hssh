@@ -27,6 +27,11 @@ public:
 
     void feedData(const QByteArray &data);
 
+    // PH1-05: runtime font change — recompute cell metrics, resize the
+    // terminal grid and repaint.
+    void setTerminalFont(const QFont &font);
+    [[nodiscard]] QFont terminalFont() const { return m_font; }
+
     [[nodiscard]] int columns() const { return m_cols; }
     [[nodiscard]] int rows() const { return m_rows; }
 
@@ -44,12 +49,39 @@ public:
     // (empty leading rows trimmed), maxLines caps the result (0 = all).
     [[nodiscard]] QString bufferTextRange(int fromLine, int maxLines) const;
 
+    // PH2-03: the URL (http/https/file/mailto) under a widget position, or
+    // an empty string. Trailing sentence punctuation is excluded.
+    [[nodiscard]] QString linkAt(const QPoint &pos) const;
+
+    // PH2-04: parse an OSC 52 payload ("52;Ps;Pb64") into the decoded
+    // clipboard bytes. Empty when the sequence is malformed, a clipboard
+    // query, aimed at an unsupported clipboard, or larger than 1 MB.
+    [[nodiscard]] static QByteArray decodeOsc52(const QByteArray &payload);
+
+    // PH2-02: timestamp gutter ("[HH:MM:SS]" left of the grid). Toggling
+    // re-derives the grid geometry (columns shrink by the gutter).
+    void setShowTimestamps(bool on);
+    [[nodiscard]] bool showTimestamps() const { return m_showTimestamps; }
+
+    // PH2-02: outline access — the outline dock lists "interesting" buffer
+    // rows (prompts, build headers, timestamped log lines) and jumps to them.
+    [[nodiscard]] int bufferRowCount() const;
+    [[nodiscard]] QString outlineLineAt(int logicalRow) const;
+    void scrollToLogicalRow(int logicalRow);
+    // PH2-01: re-wrap the scrollback to a new column count (merge wrapped
+    // physical lines into logical lines, re-chunk column-aware so wide
+    // glyphs never straddle a boundary). Selection is dropped; an active
+    // search re-runs. The column-change debounce calls this; tests drive it
+    // directly.
+    void reflowScrollback(int newCols);
+
 signals:
     void dataToSend(const QByteArray &data);
     void titleChanged(const QString &title);
     void sizeChanged(int columns, int rows);
 
 protected:
+    bool event(QEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
@@ -69,6 +101,9 @@ protected:
 
 private:
     void initializeTerminal();
+    // Re-derive the glyph grid from m_font as measured on this widget's own
+    // paint device; returns true when a cell metric changed.
+    bool recomputeCellMetrics();
     void updateTerminalSize();
     void updateScrollBar();
     void scrollToBottom();
@@ -103,7 +138,13 @@ private:
         VTermColor fg{};
         VTermColor bg{};
     };
-    using ScrollbackLine = std::vector<ScrollbackCell>;
+    struct ScrollbackEntry {
+        std::vector<ScrollbackCell> cells;
+        qint64 arriveMs = 0; // scroll-off time, shown by the timestamp gutter
+        // PH2-01: this physical line continued the previous one (its content
+        // filled the row exactly); reflow merges on this flag.
+        bool wrapped = false;
+    };
 
     // A style-normalized screen cell ready for run-based painting.
     struct PaintCell {
@@ -147,7 +188,7 @@ private:
 
     VTerm *m_vterm = nullptr;
     VTermScreen *m_screen = nullptr;
-    std::deque<ScrollbackLine> m_scrollback;
+    std::deque<ScrollbackEntry> m_scrollback;
 #endif
 
     QScrollBar *m_scrollBar = nullptr;
@@ -163,15 +204,42 @@ private:
     int m_cellWidth = 8;
     int m_cellHeight = 16;
     int m_cellAscent = 12;
+    // True when every glyph of m_font has the same advance, i.e. a whole run
+    // of text can be painted as one string and still land on the cell grid.
+    bool m_monospaceFont = true;
     int m_margin = 6; // content padding on every side
+    // PH2-02: timestamp gutter and per-row arrival stamps.
+    bool m_showTimestamps = false;
+    int m_gutterWidth = 0; // 0 when off, else 11 cells ("[HH:MM:SS] ")
+    std::vector<qint64> m_rowStamps; // live-screen rows, ms epoch
+    // PH2-01: scrollback reflow debounce (dragging resizes the window in a
+    // storm; only the settled column count reflows).
+    QTimer *m_reflowTimer = nullptr;
+    int m_reflowTargetCols = -1;
+    [[nodiscard]] int contentX() const { return m_margin + m_gutterWidth; }
+    void updateGutterWidth();
     int m_cols = 80;
     int m_rows = 24;
     int m_scrollOffset = 0; // rows scrolled up from the bottom of the buffer
+    // Remote mouse-reporting mode from VTERM_PROP_MOUSE (0 off, 1 click,
+    // 2 drag, 3 move). Non-zero routes mouse events to the remote app.
+    int m_mouseMode = 0;
     bool m_cursorVisible = true;
     QPoint m_cursorPos; // cell coordinates (col, row)
 
     QLineEdit *m_searchBar = nullptr;
     QString m_searchText;
+    // PH2-03: URL under the cursor while hovering (empty = none).
+    QString m_hoverLink;
+
+    // PH2-04: OSC 52 (clipboard set) sniffer state machine. libvterm does
+    // not surface OSC 52, so the raw stream is sniffed alongside it.
+    enum class Osc52State { Ground, Esc, Body, BodyEsc };
+    Osc52State m_osc52State = Osc52State::Ground;
+    QByteArray m_osc52Buffer;
+    bool m_osc52Handling = false; // reentrancy guard for the prompt dialog
+    void scanOsc52(const QByteArray &data);
+    void handleOsc52(const QByteArray &payload);
     // Matches on the visible buffer as {row, startCol, endCol} (inclusive).
     QVector<QVector<int>> m_searchRowMatches; // logical row -> flat [start,end,...]
     int m_currentMatch = -1;                  // index into m_searchMatches

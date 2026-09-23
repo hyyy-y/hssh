@@ -1,4 +1,4 @@
-#include "ChannelCopySession.h"
+﻿#include "ChannelCopySession.h"
 
 #include "SshConnect.h"
 
@@ -278,7 +278,7 @@ void ChannelCopySession::doDownload(const QString &remotePath, const QString &lo
         if (retryable && attempt == 1 && !m_cancelTransfer) {
             // Neither format supports resume: the retry starts from scratch,
             // which also discards a corrupt prefix.
-            QFile::remove(localPath);
+            QFile::remove(localPath + QStringLiteral(".part"));
             continue;
         }
         emit transferFinished(remotePath, false, error);
@@ -448,10 +448,13 @@ bool ChannelCopySession::downloadBase64(const QString &remotePath, const QString
     };
     *outRetryable = false;
 
-    QFile local(localPath);
+    // Atomic landing: bytes stream into "<local>.part" and are renamed to
+    // the final name only after success (+ verification).
+    const QString partPath = localPath + QStringLiteral(".part");
+    QFile local(partPath);
     QDir().mkpath(QFileInfo(localPath).absolutePath());
     if (!local.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        return fail(tr("Cannot write to %1").arg(localPath));
+        return fail(tr("Cannot write to %1").arg(partPath));
     }
 
     ssh_channel channel = ssh_channel_new(m_ssh);
@@ -549,7 +552,7 @@ bool ChannelCopySession::downloadBase64(const QString &remotePath, const QString
         }
 
         if (verify) {
-            const QByteArray localDigest = localMd5Hex(localPath);
+            const QByteArray localDigest = localMd5Hex(partPath);
             const QByteArray remoteDigest = remoteMd5Hex(m_ssh, remotePath);
             if (!remoteDigest.isEmpty() && remoteDigest != localDigest) {
                 error = tr("Download verification failed: local content differs "
@@ -570,6 +573,16 @@ bool ChannelCopySession::downloadBase64(const QString &remotePath, const QString
             }
         } else if (outNote) {
             *outNote = tr("downloaded via base64 (verification off)");
+        }
+        // Atomic landing: only now does the file appear under its real name.
+        // Close the .part first — Windows refuses to rename an open file
+        // (2026-09-20 verification round).
+        local.close();
+        QFile::remove(localPath);
+        if (!QFile::rename(partPath, localPath)) {
+            ok = false;
+            error = tr("Downloaded to %1 but failed to finalize %2").arg(partPath, localPath);
+            break;
         }
         emit transferProgress(remotePath, done, done);
         break;
@@ -736,7 +749,10 @@ bool ChannelCopySession::downloadScp(const QString &remotePath, const QString &l
         return fail(QString::fromUtf8(ssh_get_error(m_ssh)));
     }
 
-    QFile local(localPath);
+    // Atomic landing: bytes stream into "<local>.part" and are renamed to
+    // the final name only after success (+ verification).
+    const QString partPath = localPath + QStringLiteral(".part");
+    QFile local(partPath);
     QDir().mkpath(QFileInfo(localPath).absolutePath());
 
     bool ok = false;
@@ -759,6 +775,8 @@ bool ChannelCopySession::downloadScp(const QString &remotePath, const QString &l
                 const quint64 size = ssh_scp_request_get_size64(scp);
                 const QString name = QString::fromUtf8(ssh_scp_request_get_filename(scp));
                 emit transferStep(remotePath, 1, 1, name);
+                // Report the size immediately (status endpoint bytesTotal).
+                emit transferProgress(remotePath, 0, static_cast<qint64>(size));
                 if (ssh_scp_accept_request(scp) != SSH_OK) {
                     ok = false;
                     error = QString::fromUtf8(ssh_get_error(m_ssh));
@@ -766,7 +784,7 @@ bool ChannelCopySession::downloadScp(const QString &remotePath, const QString &l
                 }
                 if (!local.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
                     ok = false;
-                    error = tr("Cannot write to %1").arg(localPath);
+                    error = tr("Cannot write to %1").arg(partPath);
                     ssh_scp_deny_request(scp, "local open failed");
                     break;
                 }
@@ -842,7 +860,7 @@ bool ChannelCopySession::downloadScp(const QString &remotePath, const QString &l
         }
 
         if (verify) {
-            const QByteArray localDigest = localMd5Hex(localPath);
+            const QByteArray localDigest = localMd5Hex(partPath);
             const QByteArray remoteDigest = remoteMd5Hex(m_ssh, remotePath);
             if (!remoteDigest.isEmpty() && remoteDigest != localDigest) {
                 error = tr("Download verification failed: local content differs "
@@ -862,6 +880,15 @@ bool ChannelCopySession::downloadScp(const QString &remotePath, const QString &l
             }
         } else if (outNote) {
             *outNote = tr("downloaded via scp (verification off)");
+        }
+        // Atomic landing: only now does the file appear under its real name.
+        // Close the .part first — Windows refuses to rename an open file.
+        local.close();
+        QFile::remove(localPath);
+        if (!QFile::rename(partPath, localPath)) {
+            ok = false;
+            error = tr("Downloaded to %1 but failed to finalize %2").arg(partPath, localPath);
+            break;
         }
         emit transferProgress(remotePath, done, done);
         break;

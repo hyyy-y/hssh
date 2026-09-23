@@ -1,12 +1,14 @@
 #ifndef HSSH_APP_WIDGETS_SFTPWIDGET_H
 #define HSSH_APP_WIDGETS_SFTPWIDGET_H
 
+#include "core/ChannelCopySession.h"
 #include "core/SessionConfig.h"
 #include "core/SftpSession.h"
 #include "app/TransferRegistry.h"
 
 #include <QColor>
 #include <QHash>
+#include <QPointer>
 #include <QSet>
 #include <QWidget>
 
@@ -16,6 +18,7 @@ class QLineEdit;
 class QProgressDialog;
 class QStandardItemModel;
 class QTableView;
+class QComboBox;
 class QToolButton;
 QT_END_NAMESPACE
 
@@ -77,6 +80,10 @@ private:
     void mkdirDialog();
     void renameEntry(const SftpFileInfo &entry);
     void deleteEntries(const QList<SftpFileInfo> &entries);
+    // PH2-09: the selected transfer channel ("sftp"/"scp") and the SCP route
+    // (a parentless ChannelCopySession worker, freed on finish).
+    [[nodiscard]] QString transferMethod() const;
+    void startCopyTransfer(bool isUpload, const QString &remotePath, const QString &localPath);
 
     void onConnected(const QString &homePath);
     void onDirListed(const QString &path, const QList<SftpFileInfo> &entries);
@@ -98,6 +105,8 @@ private:
     SftpSession *m_sftp = nullptr;
     QLineEdit *m_pathEdit = nullptr;
     QToolButton *m_uploadButton = nullptr;
+    QComboBox *m_methodBox = nullptr;          // PH2-09: SFTP/SCP picker
+    QPointer<class ChannelCopySession> m_copyWorker; // PH2-09: active SCP worker
     QTableView *m_view = nullptr;
     QStandardItemModel *m_model = nullptr;
     QLabel *m_statusLabel = nullptr;
