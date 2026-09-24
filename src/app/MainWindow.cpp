@@ -2360,8 +2360,16 @@ void MainWindow::restorePreviousTabs()
         byId.insert(config.id(), config);
     }
 
-    for (const QVariant &entryVariant : saved) {
-        const QVariantMap entry = entryVariant.toMap();
+    // STAGGERED restore: one tab every 1.5 s. Restoring all tabs at once
+    // opens every SSH connection concurrently — enough simultaneous
+    // half-open handshakes to trip remote sshd MaxStartups (soft drops) or
+    // fail2ban-style IP bans on public servers (2026-09-23: both happened).
+    const auto restorer = std::make_shared<std::function<void(int)>>();
+    *restorer = [this, saved, byId, restorer](int pos) {
+        if (!m_tabWidget || pos >= saved.size()) {
+            return;
+        }
+        const QVariantMap entry = saved.at(pos).toMap();
         const QString type = entry.value(QStringLiteral("type")).toString();
         int index = -1;
         if (type == QLatin1String("ssh") || type == QLatin1String("serial")) {
@@ -2374,22 +2382,25 @@ void MainWindow::restorePreviousTabs()
             onNewLocalTerminal(entry.value(QStringLiteral("shell")).toString());
             index = m_tabWidget->count() - 1;
         }
-        if (index < 0) {
-            continue;
+        if (index >= 0) {
+            // PH1-08: restore alias / color / pin.
+            const QString title = entry.value(QStringLiteral("title")).toString();
+            if (!title.isEmpty()) {
+                m_tabWidget->setTabText(index, title);
+            }
+            const QString colorName = entry.value(QStringLiteral("color")).toString();
+            if (!colorName.isEmpty()) {
+                applyTabColor(index, QColor(colorName));
+            }
+            if (entry.value(QStringLiteral("pinned")).toBool()) {
+                setTabPinned(index, true);
+            }
         }
-        // PH1-08: restore alias / color / pin.
-        const QString title = entry.value(QStringLiteral("title")).toString();
-        if (!title.isEmpty()) {
-            m_tabWidget->setTabText(index, title);
-        }
-        const QString colorName = entry.value(QStringLiteral("color")).toString();
-        if (!colorName.isEmpty()) {
-            applyTabColor(index, QColor(colorName));
-        }
-        if (entry.value(QStringLiteral("pinned")).toBool()) {
-            setTabPinned(index, true);
-        }
-    }
+        QTimer::singleShot(1500, this, [restorer, pos]() {
+            (*restorer)(pos + 1);
+        });
+    };
+    (*restorer)(0);
 }
 
 void MainWindow::applyFocusMode(bool enabled)
