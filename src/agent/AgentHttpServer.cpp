@@ -1,4 +1,4 @@
-﻿#include "AgentHttpServer.h"
+#include "AgentHttpServer.h"
 
 #include "agent/AgentAudit.h"
 #include "agent/AgentMcpServer.h"
@@ -226,6 +226,24 @@ public:
         qint64 startedMs = 0;
     };
 
+    // Outcome of the last transfer on a tab. Kept after the live record is
+    // gone so "active:false" never has to mean "unknown": callers can tell a
+    // verified success from a failure/cancel without trusting a client-side
+    // timeout (2026-11-02 "transfer inactive but files missing" report).
+    struct TransferResult {
+        bool ok = false;
+        bool cancelled = false;
+        bool upload = false;
+        QString method;
+        QString localPath;
+        QString remotePath;
+        qint64 bytesDone = 0;
+        qint64 bytesTotal = 0;
+        qint64 startedMs = 0;
+        qint64 finishedMs = 0;
+        QString message;
+    };
+
     // A visible exec running in a GUI tab: the command was typed into the
     // terminal bracketed by unique begin/end markers; a timer polls the
     // buffer until the end marker (with the real exit code) appears.
@@ -246,6 +264,12 @@ public:
     QHash<QTcpSocket *, QByteArray> buffers;
     QHash<QString, PendingOp> pendingOps; // requestId -> in-flight operation
     QHash<QString, TabTransfer> tabTransfers; // requestId -> tab transfer
+    QHash<int, TransferResult> lastTransferResults; // tab index -> last outcome
+    // Latest transfer request per tab index. Tab indices are reused when a
+    // tab is closed while its (cancelled) worker is still winding down; an
+    // old worker must not report progress/outcomes for the new tab that now
+    // occupies the same index (2026-11-02 index-reuse confusion).
+    QHash<int, QString> latestTransferIds;
     QHash<QString, TabExec> tabExecs; // requestId -> visible exec
     QSet<int> tabExecBusy; // tab indices with a running visible exec
     // Tabs whose last exec ended on timeout: the command kept running and
@@ -496,16 +520,16 @@ void AgentHttpServer::onNewConnection()
             d->buffers.remove(socket);
             for (auto it = d->pendingOps.begin(); it != d->pendingOps.end();) {
                 if (it.value().socket == socket) {
-                    // The client is gone (typically a client-side timeout):
-                    // cancel the server-side work too.
+                    // The client is gone (typically a client-side timeout).
+                    // A visible exec is aborted (it types into a shared
+                    // terminal and would hold the 409 lock), but a file
+                    // transfer is NOT: it runs on its own connection and
+                    // must finish, otherwise a client timeout silently
+                    // cancels a healthy upload mid-flight and leaves a
+                    // partial file behind (2026-11-02 support files never
+                    // uploaded). Its outcome is recorded for /transfer.
                     if (it.value().action == QLatin1String("tab_exec")) {
                         finishTabExec(it.key());
-                    } else if (it.value().action.startsWith(QLatin1String("tab_"))) {
-                        // Tab transfer: cancel its dedicated session.
-                        auto tt = d->tabTransfers.constFind(it.key());
-                        if (tt != d->tabTransfers.constEnd() && tt.value().worker) {
-                            tt.value().worker->cancelTransfer();
-                        }
                     }
                     it = d->pendingOps.erase(it);
                 } else {
@@ -1083,6 +1107,11 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
             transfer.async = asyncStart;
             transfer.startedMs = op.startedMs;
             d->tabTransfers[requestId] = transfer;
+            // A new transfer invalidates the previous tab's result, and takes
+            // ownership of the index: a worker left over from a closed tab
+            // must not report into this tab (tab indices get reused).
+            d->latestTransferIds[index] = requestId;
+            d->lastTransferResults.remove(index);
             startTabTransferWorker(requestId, chain.first());
 
             if (asyncStart) {
@@ -1108,8 +1137,15 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
         if (method == "GET" && sub == QStringLiteral("transfer")) {
             QJsonObject result;
             result[QStringLiteral("active")] = false;
+            // Only the current transfer owns this index. Copies left over
+            // from a closed tab (index reused by the next tab) must not
+            // report active/cancelled for the new tab.
+            const QString latestId = d->latestTransferIds.value(index);
             for (auto it = d->tabTransfers.cbegin(); it != d->tabTransfers.cend(); ++it) {
                 if (it.value().tabIndex != index) {
+                    continue;
+                }
+                if (!latestId.isEmpty() && it.key() != latestId) {
                     continue;
                 }
                 const Impl::TabTransfer &t = it.value();
@@ -1131,6 +1167,27 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
                 result[QStringLiteral("elapsedMs")] =
                     QDateTime::currentMSecsSinceEpoch() - t.startedMs;
                 break;
+            }
+            // "active:false" is not proof of success. Carry the last
+            // completed outcome so a client whose own request timed out can
+            // verify what actually happened on the server.
+            const auto last = d->lastTransferResults.constFind(index);
+            if (last != d->lastTransferResults.constEnd()) {
+                const Impl::TransferResult &r = last.value();
+                QJsonObject outcome;
+                outcome[QStringLiteral("ok")] = r.ok;
+                outcome[QStringLiteral("cancelled")] = r.cancelled;
+                outcome[QStringLiteral("direction")] =
+                    r.upload ? QStringLiteral("upload") : QStringLiteral("download");
+                outcome[QStringLiteral("method")] = r.method;
+                outcome[QStringLiteral("localPath")] = r.localPath;
+                outcome[QStringLiteral("remotePath")] = r.remotePath;
+                outcome[QStringLiteral("bytesDone")] = r.bytesDone;
+                outcome[QStringLiteral("bytesTotal")] = r.bytesTotal;
+                outcome[QStringLiteral("startedMs")] = r.startedMs;
+                outcome[QStringLiteral("finishedMs")] = r.finishedMs;
+                outcome[QStringLiteral("message")] = r.message;
+                result[QStringLiteral("lastResult")] = outcome;
             }
             respond(socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
             return;
@@ -1508,6 +1565,20 @@ void AgentHttpServer::handleRequest(QTcpSocket *socket, HttpRequest request)
                 respondError(socket, 404, "Unknown tab index: " + indexText);
                 return;
             }
+            // The tab is gone: stop transfers that were running on it, and
+            // drop its recorded outcome so the NEXT tab reusing this index
+            // starts with a clean state instead of inheriting "active".
+            for (auto it = d->tabTransfers.begin(); it != d->tabTransfers.end(); ++it) {
+                if (it.value().tabIndex != index) {
+                    continue;
+                }
+                if (!it.value().cancelled && it.value().worker) {
+                    it.value().worker->cancelTransfer();
+                    it.value().cancelled = true;
+                }
+            }
+            d->lastTransferResults.remove(index);
+            d->latestTransferIds.remove(index);
             AgentAudit::log(AgentAudit::Source::Rest, QStringLiteral("tab_close"),
                             QStringLiteral("tab=%1").arg(index), QStringLiteral("ok"));
             QJsonObject result;
@@ -1595,6 +1666,7 @@ void AgentHttpServer::startTabTransferWorker(const QString &requestId, const QSt
 void AgentHttpServer::onTabTransferFinished(const QString &requestId, const QString &path,
                                             bool ok, const QString &message)
 {
+    Q_UNUSED(path); // the key differs by direction; use the recorded paths
     const auto tt = d->tabTransfers.find(requestId);
     if (tt == d->tabTransfers.end()) {
         return; // already handled (errorOccurred + transferFinished pair)
@@ -1603,10 +1675,11 @@ void AgentHttpServer::onTabTransferFinished(const QString &requestId, const QStr
     // "auto" fallback: walk the remaining chain while the failing method
     // never got a single byte across (subsystem/channel-level failure).
     // A failure after bytes moved is a real error and is reported as-is.
-    // A user-cancelled transfer never falls back.
+    // A user-cancelled transfer never falls back. A transfer whose client
+    // disconnected still walks the chain: it was allowed to finish for a
+    // reason, and the result is recorded either way.
     if (!ok && !tt.value().cancelled && !tt.value().remainingMethods.isEmpty()
-        && tt.value().bytesDone == 0
-        && (d->pendingOps.contains(requestId) || tt.value().async)) {
+        && tt.value().bytesDone == 0) {
         TransferSession *old = tt.value().worker;
         const QString failedMethod = old ? old->metaObject()->className() : QString();
         AgentAudit::log(AgentAudit::Source::Rest,
@@ -1625,10 +1698,35 @@ void AgentHttpServer::onTabTransferFinished(const QString &requestId, const QStr
     }
 
     TransferSession *worker = tt.value().worker;
-    const bool wasAsync = tt.value().async;
-    const QString auditAction = tt.value().action;
-    const QString auditDetail = tt.value().auditDetail;
+    const Impl::TabTransfer finished = tt.value();
+    const bool wasAsync = finished.async;
+    const QString auditAction = finished.action;
+    const QString auditDetail = finished.auditDetail;
     d->tabTransfers.erase(tt);
+
+    // Record the outcome before answering: the status endpoint must be able
+    // to answer "did it actually finish, and did the content verify?" after
+    // the live record is gone (and even when the original client timed out
+    // and can no longer receive this response).
+    Impl::TransferResult outcome;
+    outcome.ok = ok;
+    outcome.cancelled = finished.cancelled;
+    outcome.upload = finished.isUpload;
+    outcome.method = finished.currentMethod;
+    outcome.localPath = finished.localPath;
+    outcome.remotePath = finished.remotePath;
+    outcome.bytesDone = finished.bytesDone;
+    outcome.bytesTotal = finished.bytesTotal;
+    outcome.startedMs = finished.startedMs;
+    outcome.finishedMs = QDateTime::currentMSecsSinceEpoch();
+    outcome.message = message;
+    // Only the transfer that currently owns the tab index may publish its
+    // outcome: a worker from a closed tab can finish after the index was
+    // reused, and its stale "cancelled/failed" must not overwrite the new
+    // tab's result.
+    if (d->latestTransferIds.value(finished.tabIndex) == requestId) {
+        d->lastTransferResults[finished.tabIndex] = outcome;
+    }
 
     const auto opIt = d->pendingOps.find(requestId);
     if (opIt != d->pendingOps.end()) {
@@ -1642,7 +1740,16 @@ void AgentHttpServer::onTabTransferFinished(const QString &requestId, const QStr
         } else {
             QJsonObject result;
             result[QStringLiteral("ok")] = true;
-            result[QStringLiteral("path")] = path;
+            // "path" is the file that now exists in its destination: the
+            // remote path for an upload (it used to echo the local path),
+            // the local path for a download.
+            result[QStringLiteral("path")] =
+                finished.isUpload ? finished.remotePath : finished.localPath;
+            result[QStringLiteral("localPath")] = finished.localPath;
+            result[QStringLiteral("remotePath")] = finished.remotePath;
+            result[QStringLiteral("method")] = finished.currentMethod;
+            result[QStringLiteral("bytesDone")] = finished.bytesDone;
+            result[QStringLiteral("bytesTotal")] = finished.bytesTotal;
             // Success note carries the method and md5 ("downloaded via scp,
             // md5 verified: ...").
             if (!message.isEmpty()) {
@@ -1650,12 +1757,19 @@ void AgentHttpServer::onTabTransferFinished(const QString &requestId, const QStr
             }
             respond(op.socket, 200, QJsonDocument(result).toJson(QJsonDocument::Compact));
         }
-    } else if (wasAsync) {
-        // Async transfers outlive their starting request: the completion is
-        // only visible through the audit log (and the file itself).
+    } else {
+        // The client disconnected (usually its own timeout). The transfer was
+        // allowed to finish and its result is now visible via /transfer;
+        // never answer a dead socket.
         AgentAudit::log(AgentAudit::Source::Rest, auditAction, auditDetail,
-                        ok ? (message.isEmpty() ? QStringLiteral("ok (async)") : QStringLiteral("ok (async) %1").arg(message))
-                           : QStringLiteral("error (async): %1").arg(message));
+                        ok ? QStringLiteral("ok%1 %2")
+                                 .arg(wasAsync ? QStringLiteral(" (async)")
+                                               : QStringLiteral(" (client gone)"),
+                                      message)
+                           : QStringLiteral("error%1: %2")
+                                 .arg(wasAsync ? QStringLiteral(" (async)")
+                                               : QStringLiteral(" (client gone)"),
+                                      message));
     }
     if (worker) {
         worker->stop();

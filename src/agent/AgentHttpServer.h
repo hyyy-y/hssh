@@ -172,7 +172,20 @@ public:
 //                                             renamed atomically on success. async:true
 //                                             starts the transfer and answers immediately
 //                                             (poll GET /transfer; cancel DELETE /transfer).
-//   GET    /api/v1/tabs/<ref>/transfer        {active, direction?, method?, bytesDone?, ...}
+//                                             A client timeout/disconnect does NOT cancel
+//                                             the transfer: it finishes on its server-side
+//                                             connection and the outcome is reported by
+//                                             GET /transfer's lastResult.
+//                                             Success answers {ok, path (destination),
+//                                             localPath, remotePath, method, bytesDone,
+//                                             bytesTotal, message (incl. md5 note)}.
+//   GET    /api/v1/tabs/<ref>/transfer        {active, direction?, method?, bytesDone?, ...,
+//                                             lastResult?: {ok, cancelled, direction,
+//                                             method, localPath, remotePath, bytesDone,
+//                                             bytesTotal, startedMs, finishedMs, message}}
+//                                             lastResult survives the transfer: "inactive"
+//                                             plus lastResult.ok/message is the only proof
+//                                             the file arrived and verified.
 //   DELETE /api/v1/tabs/<ref>/transfer        cancels the tab's transfer (keeps the .part)
 //   POST   /api/v1/tabs/<ref>/forward         {type:"local"|"remote"|"dynamic", bindAddress?,
 //                                              bindPort, targetHost?, targetPort?} adds a port

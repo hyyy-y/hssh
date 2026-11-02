@@ -56,13 +56,22 @@ void SftpSession::stop()
     }
     m_cancelTransfer = true;
     m_thread.quit();
-    // A running transfer checks the cancel flag every chunk, so this returns
-    // promptly; blocking network calls are bounded by the connect timeout.
-    if (!m_thread.wait(5000)) {
-        m_thread.terminate();
-        m_thread.wait();
+    // A running transfer checks the cancel flag every chunk. Bulk sessions
+    // deliberately run with SSH_OPTIONS_TIMEOUT=0 (a timed-out channel write
+    // is a silent short write / upload corruption), so a wedged link can park
+    // the worker inside libssh indefinitely. Do not wait forever on the GUI
+    // thread: shut the socket down to wake it (2026-10-29 window freeze).
+    if (!m_thread.wait(2000)) {
+        sshInterruptSocket(m_ssh);
+        if (!m_thread.wait(3000)) {
+            m_thread.terminate();
+            m_thread.wait();
+        }
     }
     // The thread is down: no concurrent access, safe to clean up here.
+    // Shutting the socket down first keeps ssh_disconnect from blocking on a
+    // link that is already dead.
+    sshInterruptSocket(m_ssh);
     if (m_sftp) {
         sftp_free(m_sftp);
         m_sftp = nullptr;
@@ -80,6 +89,7 @@ void SftpSession::listDir(const QString &path)
 
 void SftpSession::listDirRecursive(const QString &path, int maxDepth)
 {
+    m_cancelTransfer = false;
     QMetaObject::invokeMethod(this, [this, path, maxDepth]() {
         doListDirRecursive(path, maxDepth);
     }, Qt::QueuedConnection);
@@ -129,6 +139,10 @@ void SftpSession::setPermissions(const QString &path, quint32 mode)
 
 void SftpSession::setPermissionsRecursive(const QString &path, quint32 mode)
 {
+    // Clear a cancel left over from the previous operation HERE (same thread
+    // as cancelTransfer): the worker thread may only start after the connect
+    // finishes, and a cancel requested during that connect must survive.
+    m_cancelTransfer = false;
     QMetaObject::invokeMethod(this, [this, path, mode]() {
         doSetPermissionsRecursive(path, mode);
     }, Qt::QueuedConnection);
@@ -136,6 +150,7 @@ void SftpSession::setPermissionsRecursive(const QString &path, quint32 mode)
 
 void SftpSession::download(const QString &remotePath, const QString &localPath, bool verify)
 {
+    m_cancelTransfer = false;
     QMetaObject::invokeMethod(this, [this, remotePath, localPath, verify]() {
         doDownload(remotePath, localPath, verify);
     }, Qt::QueuedConnection);
@@ -143,6 +158,7 @@ void SftpSession::download(const QString &remotePath, const QString &localPath, 
 
 void SftpSession::downloadDir(const QString &remotePath, const QString &localDir)
 {
+    m_cancelTransfer = false;
     QMetaObject::invokeMethod(this, [this, remotePath, localDir]() {
         doDownloadDir(remotePath, localDir);
     }, Qt::QueuedConnection);
@@ -150,6 +166,7 @@ void SftpSession::downloadDir(const QString &remotePath, const QString &localDir
 
 void SftpSession::upload(const QString &localPath, const QString &remotePath, bool verify)
 {
+    m_cancelTransfer = false;
     QMetaObject::invokeMethod(this, [this, localPath, remotePath, verify]() {
         doUpload(localPath, remotePath, verify);
     }, Qt::QueuedConnection);
@@ -333,7 +350,10 @@ void SftpSession::doSetPermissionsRecursive(const QString &path, quint32 mode)
     QString error;
     m_treeWalkCount = 0;
     m_treeWalkPath = path;
-    m_cancelTransfer = false;
+    if (m_cancelTransfer) {
+        emit operationFinished(QStringLiteral("chmod"), false, tr("Cancelled"));
+        return;
+    }
     if (!collectRemoteFiles(path, QString(), entries, error, true)) {
         emit errorOccurred(tr("Recursive chmod failed while listing %1: %2").arg(path, error));
         return;
@@ -467,6 +487,11 @@ bool SftpSession::downloadAttempt(const QString &remotePath, const QString &loca
     if (!m_sftp) {
         return fail(tr("SFTP session is not connected"));
     }
+    // A cancel that arrived while the worker was connecting must be honoured
+    // before the transfer creates or truncates any local file.
+    if (m_cancelTransfer) {
+        return fail(tr("Cancelled"));
+    }
 
     sftp_attributes attr = sftp_stat(m_sftp, remotePath.toUtf8().constData());
     if (!attr) {
@@ -545,7 +570,6 @@ bool SftpSession::downloadAttempt(const QString &remotePath, const QString &loca
         local.seek(startOffset);
     }
 
-    m_cancelTransfer = false;
     emit transferStep(remotePath, 1, 1, remotePath.section(QLatin1Char('/'), -1));
     QString error;
     qint64 done = startOffset;
@@ -691,9 +715,6 @@ void SftpSession::doListDirRecursive(const QString &path, int maxDepth)
     QString error;
     m_treeWalkCount = 0;
     m_treeWalkPath = path;
-    // A cancel flag left over from a previous transfer would abort this walk
-    // on its first entry — every walk starts cancellable, not pre-cancelled.
-    m_cancelTransfer = false;
     if (!collectRemoteFiles(path, QString(), entries, error, true, 0, maxDepth)) {
         emit errorOccurred(error);
         return;
@@ -709,7 +730,10 @@ void SftpSession::doDownloadDir(const QString &remotePath, const QString &localD
     }
 
     // Walk first so the progress dialog can show a real total from the start.
-    m_cancelTransfer = false;
+    if (m_cancelTransfer) {
+        emit transferFinished(remotePath, false, tr("Cancelled"));
+        return;
+    }
     QList<RemoteFileEntry> files;
     QString error;
     if (!collectRemoteFiles(remotePath, QString(), files, error)) {
@@ -823,6 +847,11 @@ bool SftpSession::uploadAttempt(const QString &localPath, const QString &remoteP
     if (!m_sftp) {
         return fail(tr("SFTP session is not connected"));
     }
+    // A cancel that arrived while the worker was connecting must be honoured
+    // BEFORE the remote file is opened/truncated.
+    if (m_cancelTransfer) {
+        return fail(tr("Cancelled"));
+    }
 
     QFile local(localPath);
     if (!local.open(QIODevice::ReadOnly)) {
@@ -878,7 +907,6 @@ bool SftpSession::uploadAttempt(const QString &localPath, const QString &remoteP
         local.seek(startOffset);
     }
 
-    m_cancelTransfer = false;
     bool ok = true;
     QString error;
     qint64 done = startOffset;

@@ -54,6 +54,11 @@ public:
     [[nodiscard]] State state() const;
     [[nodiscard]] QString errorString() const;
     [[nodiscard]] bool isConnected() const override;
+    // Numeric IP of the live transport peer, cached when the connection is
+    // established (empty while disconnected). GUI/API code reads this WITHOUT
+    // locking the libssh session mutex: a worker blocked in a network call
+    // must never freeze the interface (2026-10-29 window freeze).
+    [[nodiscard]] QString peerAddress() const;
 
     void connectToHost() override;
     void disconnect() override;

@@ -40,6 +40,18 @@ ssh_session sshConnectAndAuthenticate(const SessionConfig &config, QString *erro
 // Releases a session returned by sshConnectAndAuthenticate.
 void sshDisconnectAndFree(ssh_session session);
 
+// Numeric IP address of the session's live socket peer ("1.2.3.4" / "::1"),
+// or empty when the session is gone. The transport fd is stable for the
+// session's lifetime, so this is safe to call while other threads own the
+// session: it never touches the session mutex or libssh state. Callers cache
+// the result so GUI/API threads never have to lock around libssh calls.
+QString sshPeerAddress(ssh_session session);
+
+// Shuts the session's TCP socket down so a worker blocked inside a libssh
+// read/write (a wedged link, timeout=0 on bulk transfers) returns promptly.
+// Safe from another thread: it only uses the fd, never frees the session.
+void sshInterruptSocket(ssh_session session);
+
 } // namespace hssh
 
 #endif // HSSH_CORE_SSHCONNECT_H
