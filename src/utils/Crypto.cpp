@@ -10,6 +10,7 @@
 #include <QSysInfo>
 #include <mbedtls/gcm.h>
 #include <mbedtls/pk.h>
+#include <mbedtls/version.h>
 #endif
 
 #include <cstring>
@@ -475,8 +476,18 @@ QByteArray rsaDecrypt(const QByteArray &cipherBase64, bool *ok)
     if (!pemNul.endsWith('\0')) {
         pemNul.append('\0');
     }
-    if (mbedtls_pk_parse_key(&pk, reinterpret_cast<const unsigned char *>(pemNul.constData()),
-                             pemNul.size(), nullptr, 0) != 0) {
+    // mbedTLS 3.x added RNG parameters to mbedtls_pk_parse_key() (used for
+    // blinding); mbedTLS 2.x still takes the five-argument form.
+#if defined(MBEDTLS_VERSION_NUMBER) && MBEDTLS_VERSION_NUMBER >= 0x03000000
+    const int parseRc = mbedtls_pk_parse_key(
+        &pk, reinterpret_cast<const unsigned char *>(pemNul.constData()), pemNul.size(),
+        nullptr, 0, qtRng, nullptr);
+#else
+    const int parseRc = mbedtls_pk_parse_key(
+        &pk, reinterpret_cast<const unsigned char *>(pemNul.constData()), pemNul.size(),
+        nullptr, 0);
+#endif
+    if (parseRc != 0) {
         mbedtls_pk_free(&pk);
         return fail();
     }

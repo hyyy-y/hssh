@@ -262,6 +262,15 @@ if(libssh_FOUND)
     )
     if(DEFINED mbedtls_SOURCE_DIR)
         target_include_directories(${PROJECT_NAME} PRIVATE ${mbedtls_SOURCE_DIR}/include)
+    else()
+        # utils/Crypto.cpp calls mbedTLS directly for the agent RSA key
+        # wrapping. A system libssh may be built against OpenSSL, so locate
+        # and link mbedTLS explicitly instead of relying on libssh's
+        # transitive dependencies.
+        list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+        find_package(MbedTLS REQUIRED)
+        target_include_directories(${PROJECT_NAME} PRIVATE ${MBEDTLS_INCLUDE_DIR})
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${MBEDTLS_CRYPTO_LIBRARY})
     endif()
     target_link_libraries(${PROJECT_NAME} PRIVATE ssh)
 endif()

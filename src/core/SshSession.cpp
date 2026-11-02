@@ -15,6 +15,18 @@
 #include <QThread>
 #include <QTimer>
 
+#include <cstdlib>
+#include <cstring>
+
+#ifndef Q_OS_WIN
+// POSIX plumbing used by ssh-agent forwarding: AF_UNIX sockets, poll() and
+// read()/write()/close().
+#  include <poll.h>
+#  include <sys/socket.h>
+#  include <sys/un.h>
+#  include <unistd.h>
+#endif
+
 #ifdef HSSH_HAS_LIBSSH
 #include <libssh/libssh.h>
 #include <libssh/callbacks.h>
