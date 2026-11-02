@@ -27,6 +27,13 @@ namespace hssh {
 
 namespace {
 
+#ifndef Q_OS_WIN
+// libssh's socket_t is a plain file descriptor on POSIX platforms; Windows
+// headers provide closesocket() themselves. Define the POSIX shim before the
+// proxy helpers that use it.
+inline void closesocket(socket_t fd) { ::close(fd); }
+#endif
+
 int authenticate(ssh_session session, const SessionConfig &config,
                  const KbdintPrompter &kbdintPrompter, QString *detailError)
 {
@@ -449,10 +456,6 @@ socket_t connectViaProxy(const SessionConfig &config, QString *error)
     }
     return SSH_INVALID_SOCKET;
 }
-
-#ifndef Q_OS_WIN
-inline void closesocket(socket_t fd) { ::close(fd); }
-#endif
 
 // Loopback socket pair: Windows has no socketpair(), so emulate it with a
 // short-lived TCP listener on 127.0.0.1.
