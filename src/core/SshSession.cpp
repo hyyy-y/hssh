@@ -18,6 +18,12 @@
 #ifdef HSSH_HAS_LIBSSH
 #include <libssh/libssh.h>
 #include <libssh/callbacks.h>
+
+#ifndef Q_OS_WIN
+#include <poll.h>
+#include <sys/un.h>
+#include <unistd.h>
+#endif
 #endif
 
 namespace hssh {
@@ -200,6 +206,9 @@ public:
     QByteArray shellWriteQueue;
     SshSession::State state = SshSession::State::Disconnected;
     QString errorString;
+    // Cached numeric peer address (GUI-thread only): tab metadata must never
+    // lock the session mutex just to report "user@peer:port".
+    QString peerAddress;
     SessionConfig config;
     // Last requested shell size. setShellSize before the channel is up must
     // not be dropped: it is applied when the pty is requested and re-applied
@@ -236,18 +245,29 @@ public:
         // thread may be inside a read and the probe inside ssh_send_ignore.
         if (probe) {
             probe->stop();
+        }
+        if (reader) {
+            reader->stop();
+        }
+        // Wake any worker parked inside a libssh read/write on a dead link.
+        // Without this, probeThread.wait()/readerThread.wait() can block the
+        // GUI thread for the full network timeout — the reason "Disconnect"
+        // and "Reconnect" used to freeze the whole window (and the agent API
+        // with it) instead of failing promptly.
+        sshInterruptSocket(session);
+        if (probe) {
             probeThread.quit();
             probeThread.wait();
             probe->deleteLater();
             probe = nullptr;
         }
         if (reader) {
-            reader->stop();
             readerThread.quit();
             readerThread.wait();
             reader->deleteLater();
             reader = nullptr;
         }
+        peerAddress.clear();
         if (shellChannel) {
             QMutexLocker locker(&sessionMutex);
             ssh_channel_close(shellChannel);
@@ -306,7 +326,13 @@ public:
     void run()
     {
         QString error;
-        ssh_session s = sshConnectAndAuthenticate(m_config, &error, 0, m_hostKeyVerifier,
+        // 10 s bound on post-connect blocking calls (keepalive write, channel
+        // window waits). Interactive sessions are not bulk transfers, so a
+        // short bound cannot corrupt anything: a timed-out shell write is
+        // treated as a lost transport and reconnects. With timeout=0 a dead
+        // link parked the reader/probe inside libssh forever, and the GUI
+        // thread then froze waiting for them (2026-10-29 window hang).
+        ssh_session s = sshConnectAndAuthenticate(m_config, &error, 10, m_hostKeyVerifier,
                                                   m_kbdintPrompter);
         if (!s) {
             emit done(SSH_ERROR, error);
@@ -739,6 +765,15 @@ bool SshSession::isConnected() const
     return d->state == State::Connected;
 }
 
+QString SshSession::peerAddress() const
+{
+#ifdef HSSH_HAS_LIBSSH
+    return d->ssh ? d->ssh->peerAddress : QString();
+#else
+    return {};
+#endif
+}
+
 void SshSession::setError(const QString &message)
 {
     d->errorString = message;
@@ -914,6 +949,10 @@ void SshSession::onConnectWorkerDone(int rc, const QString &message)
     }
 
     d->ssh->session = session;
+    // Cache the live peer now: the GUI thread owns the session here (the
+    // reader/probe start below), and no tab/status call should ever need to
+    // lock the session mutex afterwards.
+    d->ssh->peerAddress = sshPeerAddress(session);
     // PH1-10: accept agent channels the remote opens back (forwarding only
     // does anything once the shell also sends the request below).
     {

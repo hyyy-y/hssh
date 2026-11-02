@@ -1,4 +1,4 @@
-﻿// Tests the agent REST API tab addressing and the visible tab exec:
+// Tests the agent REST API tab addressing and the visible tab exec:
 // name-based refs ("<name>[:<ordinal>]") must keep pointing at the same
 // machine when global tab indices drift, and /tabs/<ref>/exec must capture
 // output between its begin/end markers with the real exit code.
@@ -19,6 +19,7 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTcpSocket>
+#include <QTemporaryFile>
 #include <QTest>
 #include <QTimer>
 
@@ -146,6 +147,10 @@ public:
         }
         entries.append(sshTab(config.name(), config.host(),
                               config.name().isEmpty() ? config.host() : config.name()));
+        // Keep the requested endpoint: sshTab() defaults to 22, but the
+        // real-SFTP integration test server listens on a made-up port.
+        entries.last()[QStringLiteral("port")] = config.port();
+        entries.last()[QStringLiteral("username")] = config.username();
         return entries.size() - 1;
     }
     QVariantList listSavedSessions() const override { return savedSessions; }
@@ -209,6 +214,13 @@ public:
         config.setSessionType(m.value(QStringLiteral("type")).toString() == QLatin1String("ssh")
                                   ? SessionType::Ssh
                                   : SessionType::Local);
+        // Optional real-SFTP integration test (HSSH_TEST_SFTP_*): the test
+        // server needs a password; normal fake tabs never connect.
+        const QByteArray testPassword = qgetenv("HSSH_TEST_SFTP_PASSWORD");
+        if (!testPassword.isEmpty() && config.sessionType() == SessionType::Ssh) {
+            config.setAuthMethod(AuthMethod::Password);
+            config.setPassword(SecureString(QString::fromUtf8(testPassword)));
+        }
         return config;
     }
     bool confirmSudo(int, const QString &, QString *reason) override
@@ -402,6 +414,8 @@ private slots:
     void headlessRoutesGone();
     void tabTransferValidation();
     void transferStatusAndCancel();
+    void transferSurvivesClientDisconnect();
+    void transferSuccessReportsDestination();
     void sudoAsyncRejected();
     void adHocTabOpen();
     void visibleExec();
@@ -679,6 +693,23 @@ void TestAgentHttp::transferStatusAndCancel()
     }
     QVERIFY2(released, "transfer lock not released after cancel");
 
+    // The cancelled outcome is recorded for the status endpoint, so a client
+    // that could not wait for its HTTP reply can still learn what happened.
+    QJsonObject cancelledOutcome;
+    for (int i = 0; i < 40 && cancelledOutcome.isEmpty(); ++i) {
+        const HttpResult s = httpRequest(m_server->port(), "GET",
+                                         QStringLiteral("/api/v1/tabs/10.255.255.1/transfer"));
+        const QJsonObject o = QJsonDocument::fromJson(s.body).object();
+        if (o.contains(QStringLiteral("lastResult"))) {
+            cancelledOutcome = o.value(QStringLiteral("lastResult")).toObject();
+        } else {
+            QTest::qWait(500);
+        }
+    }
+    QVERIFY2(!cancelledOutcome.isEmpty(), "cancelled transfer left no recorded result");
+    QCOMPARE(cancelledOutcome.value(QStringLiteral("cancelled")).toBool(), true);
+    QCOMPARE(cancelledOutcome.value(QStringLiteral("ok")).toBool(), false);
+
     // The tab accepts a new transfer afterwards (no stuck 409) — and clean
     // up the black-hole tab so later tests see the original tab list.
     r = httpRequest(m_server->port(), "POST",
@@ -700,6 +731,164 @@ void TestAgentHttp::transferStatusAndCancel()
     }
     httpRequest(m_server->port(), "DELETE",
                 QStringLiteral("/api/v1/tabs/10.255.255.1"));
+}
+
+void TestAgentHttp::transferSurvivesClientDisconnect()
+{
+    // 2026-11-02: a client-side timeout used to cancel the server-side
+    // transfer, so "transfer inactive" could mean a half-uploaded file.
+    // A transfer is now allowed to finish and its real outcome is recorded.
+    const HttpResult open = httpRequest(m_server->port(), "POST",
+                                        QStringLiteral("/api/v1/tabs"),
+                                        QJsonObject{{QStringLiteral("host"), QStringLiteral("10.255.255.2")},
+                                                    {QStringLiteral("username"), QStringLiteral("u")}});
+    QCOMPARE(open.status, 200);
+    const QString ref = QJsonDocument::fromJson(open.body).object()
+                            .value(QStringLiteral("ref")).toString();
+    QCOMPARE(ref, QStringLiteral("10.255.255.2"));
+    const QByteArray statusPath = QStringLiteral("/api/v1/tabs/%1/transfer").arg(ref).toUtf8();
+    const QByteArray uploadPath = QStringLiteral("/api/v1/tabs/%1/upload").arg(ref).toUtf8();
+
+    const auto status = [this, &statusPath]() {
+        const HttpResult r = httpRequest(m_server->port(), "GET", QString::fromUtf8(statusPath));
+        return QJsonDocument::fromJson(r.body).object();
+    };
+
+    // Start a synchronous upload on a raw socket. The black-hole host keeps
+    // the worker in its connect phase long enough to drop the client.
+    QTcpSocket client;
+    client.connectToHost(QHostAddress::LocalHost, m_server->port());
+    QVERIFY(client.waitForConnected(5000));
+    const QJsonObject body{{QStringLiteral("localPath"), QStringLiteral("a")},
+                           {QStringLiteral("remotePath"), QStringLiteral("b")}};
+    const QByteArray payload = QJsonDocument(body).toJson(QJsonDocument::Compact);
+    client.write("POST " + uploadPath + " HTTP/1.1\r\n"
+                 "Host: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: "
+                 + QByteArray::number(payload.size()) + "\r\nConnection: close\r\n\r\n" + payload);
+    QVERIFY(client.waitForBytesWritten(5000));
+    // A transfer that started properly does not answer before it completes;
+    // an early reply means the request was rejected (409/403/400).
+    if (client.waitForReadyRead(150)) {
+        QFAIL(qPrintable(QStringLiteral("request rejected before transfer: %1")
+                             .arg(QString::fromUtf8(client.readAll()))));
+    }
+
+    bool started = false;
+    for (int i = 0; i < 20 && !started; ++i) {
+        started = status().value(QStringLiteral("active")).toBool();
+        if (!started) {
+            QTest::qWait(100);
+        }
+    }
+    if (!started) {
+        QByteArray reply;
+        if (client.waitForReadyRead(1000)) {
+            reply = client.readAll();
+        }
+        QVERIFY2(false, qPrintable(QStringLiteral("upload did not reach the transfer slot: "
+                                                  "reply=[%1] status=%2")
+                                       .arg(QString::fromUtf8(reply),
+                                            QString::fromUtf8(QJsonDocument(status())
+                                                                  .toJson(QJsonDocument::Compact)))));
+    }
+
+    // The client goes away (its own timeout), not a DELETE.
+    client.abort();
+
+    QJsonObject outcome;
+    for (int i = 0; i < 60 && outcome.isEmpty(); ++i) {
+        const QJsonObject o = status();
+        if (!o.value(QStringLiteral("active")).toBool()
+            && o.contains(QStringLiteral("lastResult"))) {
+            outcome = o.value(QStringLiteral("lastResult")).toObject();
+        } else {
+            QTest::qWait(500);
+        }
+    }
+    QVERIFY2(!outcome.isEmpty(), "transfer outcome was not recorded after client disconnect");
+    QCOMPARE(outcome.value(QStringLiteral("ok")).toBool(), false);
+    // Never a client-induced cancellation: the failure is the real connect
+    // error, and the record says so.
+    QCOMPARE(outcome.value(QStringLiteral("cancelled")).toBool(), false);
+    QVERIFY2(!outcome.value(QStringLiteral("message")).toString()
+                  .contains(QStringLiteral("cancel"), Qt::CaseInsensitive),
+             qPrintable(outcome.value(QStringLiteral("message")).toString()));
+    QCOMPARE(outcome.value(QStringLiteral("direction")).toString(), QStringLiteral("upload"));
+
+    httpRequest(m_server->port(), "DELETE", QString::fromUtf8(statusPath));
+    httpRequest(m_server->port(), "DELETE", QStringLiteral("/api/v1/tabs/%1").arg(ref));
+}
+
+void TestAgentHttp::transferSuccessReportsDestination()
+{
+    // Real end-to-end upload against tests/sftp_test_server.py (manual
+    // integration run): the success response must name the DESTINATION file,
+    // carry the md5 note, and leave a verified lastResult behind.
+    const QByteArray hostEnv = qgetenv("HSSH_TEST_SFTP_HOST");
+    const QByteArray password = qgetenv("HSSH_TEST_SFTP_PASSWORD");
+    if (hostEnv.isEmpty() || password.isEmpty()) {
+        QSKIP("HSSH_TEST_SFTP_HOST/PASSWORD not set; skipping real SFTP agent test");
+    }
+    int port = qgetenv("HSSH_TEST_SFTP_PORT").toInt();
+    if (port <= 0) {
+        port = 22;
+    }
+    const QString host = QString::fromUtf8(hostEnv);
+    QString username = QString::fromUtf8(qgetenv("HSSH_TEST_SFTP_USER"));
+    if (username.isEmpty()) {
+        username = QStringLiteral("test");
+    }
+
+    const HttpResult open = httpRequest(m_server->port(), "POST",
+                                        QStringLiteral("/api/v1/tabs"),
+                                        QJsonObject{{QStringLiteral("host"), host},
+                                                    {QStringLiteral("port"), port},
+                                                    {QStringLiteral("username"), username}});
+    QCOMPARE(open.status, 200);
+    const QString ref = QJsonDocument::fromJson(open.body).object()
+                            .value(QStringLiteral("ref")).toString();
+    QVERIFY(!ref.isEmpty());
+
+    QTemporaryFile local;
+    QVERIFY(local.open());
+    const QByteArray content("agent upload payload\n");
+    QCOMPARE(local.write(content), qint64(content.size()));
+    local.flush();
+    const QString remotePath = QStringLiteral("/hssh_agent_upload.txt");
+
+    const HttpResult up = httpRequest(m_server->port(), "POST",
+                                      QStringLiteral("/api/v1/tabs/%1/upload").arg(ref),
+                                      QJsonObject{{QStringLiteral("localPath"), local.fileName()},
+                                                  {QStringLiteral("remotePath"), remotePath}});
+    QVERIFY2(up.status == 200, qPrintable(QString::fromUtf8(up.body)));
+    const QJsonObject body = QJsonDocument::fromJson(up.body).object();
+    QCOMPARE(body.value(QStringLiteral("ok")).toBool(), true);
+    // "path" is the remote destination for an upload (it used to echo the
+    // local temp file name).
+    QCOMPARE(body.value(QStringLiteral("path")).toString(), remotePath);
+    QCOMPARE(body.value(QStringLiteral("remotePath")).toString(), remotePath);
+    QCOMPARE(body.value(QStringLiteral("bytesDone")).toInteger(),
+             static_cast<qint64>(content.size()));
+    QVERIFY2(body.value(QStringLiteral("message")).toString()
+                 .contains(QStringLiteral("md5")),
+             qPrintable(body.value(QStringLiteral("message")).toString()));
+
+    // The same outcome survives the request: active:false plus lastResult.
+    const HttpResult status = httpRequest(m_server->port(), "GET",
+                                          QStringLiteral("/api/v1/tabs/%1/transfer").arg(ref));
+    QCOMPARE(status.status, 200);
+    const QJsonObject statusBody = QJsonDocument::fromJson(status.body).object();
+    QCOMPARE(statusBody.value(QStringLiteral("active")).toBool(), false);
+    const QJsonObject last = statusBody.value(QStringLiteral("lastResult")).toObject();
+    QCOMPARE(last.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(last.value(QStringLiteral("cancelled")).toBool(), false);
+    QCOMPARE(last.value(QStringLiteral("direction")).toString(), QStringLiteral("upload"));
+    QCOMPARE(last.value(QStringLiteral("remotePath")).toString(), remotePath);
+    QVERIFY(last.value(QStringLiteral("message")).toString()
+                .contains(QStringLiteral("md5")));
+
+    httpRequest(m_server->port(), "DELETE",
+                QStringLiteral("/api/v1/tabs/%1").arg(ref));
 }
 
 void TestAgentHttp::sudoAsyncRejected()

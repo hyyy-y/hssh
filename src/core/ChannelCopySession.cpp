@@ -1,4 +1,4 @@
-﻿#include "ChannelCopySession.h"
+#include "ChannelCopySession.h"
 
 #include "SshConnect.h"
 
@@ -181,10 +181,17 @@ void ChannelCopySession::stop()
     }
     m_cancelTransfer = true;
     m_thread.quit();
-    if (!m_thread.wait(5000)) {
-        m_thread.terminate();
-        m_thread.wait();
+    // Bulk sessions keep SSH_OPTIONS_TIMEOUT=0, so a wedged link can park the
+    // worker in a blocking libssh call. Wake it with a socket shutdown instead
+    // of freezing the GUI thread for the full wait (2026-10-29 window freeze).
+    if (!m_thread.wait(2000)) {
+        sshInterruptSocket(m_ssh);
+        if (!m_thread.wait(3000)) {
+            m_thread.terminate();
+            m_thread.wait();
+        }
     }
+    sshInterruptSocket(m_ssh);
     sshDisconnectAndFree(m_ssh);
     m_ssh = nullptr;
 }
@@ -196,6 +203,9 @@ void ChannelCopySession::cancelTransfer()
 
 void ChannelCopySession::upload(const QString &localPath, const QString &remotePath, bool verify)
 {
+    // Reset here, on the caller's thread: the worker may only start after the
+    // connection attempt, and a cancel issued meanwhile must not be lost.
+    m_cancelTransfer = false;
     QMetaObject::invokeMethod(this, [this, localPath, remotePath, verify]() {
         doUpload(localPath, remotePath, verify);
     }, Qt::QueuedConnection);
@@ -203,6 +213,7 @@ void ChannelCopySession::upload(const QString &localPath, const QString &remoteP
 
 void ChannelCopySession::download(const QString &remotePath, const QString &localPath, bool verify)
 {
+    m_cancelTransfer = false;
     QMetaObject::invokeMethod(this, [this, remotePath, localPath, verify]() {
         doDownload(remotePath, localPath, verify);
     }, Qt::QueuedConnection);
@@ -236,6 +247,10 @@ bool ChannelCopySession::reconnectIfDead(QString *error)
 
 void ChannelCopySession::doUpload(const QString &localPath, const QString &remotePath, bool verify)
 {
+    if (m_cancelTransfer) {
+        emit transferFinished(localPath, false, tr("Cancelled"));
+        return;
+    }
     for (int attempt = 1;; ++attempt) {
         QString connError;
         if (!reconnectIfDead(&connError)) {
@@ -263,6 +278,10 @@ void ChannelCopySession::doUpload(const QString &localPath, const QString &remot
 
 void ChannelCopySession::doDownload(const QString &remotePath, const QString &localPath, bool verify)
 {
+    if (m_cancelTransfer) {
+        emit transferFinished(remotePath, false, tr("Cancelled"));
+        return;
+    }
     for (int attempt = 1;; ++attempt) {
         QString connError;
         if (!reconnectIfDead(&connError)) {
@@ -334,7 +353,6 @@ bool ChannelCopySession::uploadBase64(const QString &localPath, const QString &r
         }
 
         emit transferStep(localPath, 1, 1, remotePath.section(QLatin1Char('/'), -1));
-        m_cancelTransfer = false;
         ok = true;
         qint64 done = 0;
         qint64 lastReport = 0;
@@ -484,7 +502,6 @@ bool ChannelCopySession::downloadBase64(const QString &remotePath, const QString
         }
 
         emit transferStep(remotePath, 1, 1, remotePath.section(QLatin1Char('/'), -1));
-        m_cancelTransfer = false;
         ok = true;
         qint64 lastReport = 0;
         Base64Decoder decoder;
@@ -666,7 +683,6 @@ bool ChannelCopySession::uploadScp(const QString &localPath, const QString &remo
         }
 
         emit transferStep(localPath, 1, 1, base);
-        m_cancelTransfer = false;
         ok = true;
         qint64 done = 0;
         qint64 lastReport = 0;
@@ -770,7 +786,6 @@ bool ChannelCopySession::downloadScp(const QString &remotePath, const QString &l
             break;
         }
 
-        m_cancelTransfer = false;
         ok = true;
         bool fileDone = false;
         while (!m_cancelTransfer && !fileDone) {

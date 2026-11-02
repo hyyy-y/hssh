@@ -1,4 +1,4 @@
-﻿#include "MainWindow.h"
+#include "MainWindow.h"
 
 #include "agent/AgentAudit.h"
 #include "agent/AgentHttpServer.h"
@@ -1486,38 +1486,13 @@ QVariantList MainWindow::listTabs() const
 }
 
 // IP address of the live SSH transport's remote peer, or empty when it
-// cannot be determined (non-libssh backend, already gone).
+// cannot be determined (non-libssh backend, already gone). The session caches
+// this at connect time: querying libssh here used to lock the session mutex,
+// so a worker blocked on a dead link froze the whole GUI (and every agent
+// request that lists tabs) behind it — the 2026-10-29 window hang.
 QString MainWindow::tabPeerAddress(SshSession *session) const
 {
-#ifdef HSSH_HAS_LIBSSH
-    if (!session) {
-        return {};
-    }
-    ssh_session handle = session->sessionHandle();
-    QMutex *mutex = session->sessionMutex();
-    if (!handle || !mutex) {
-        return {};
-    }
-    QMutexLocker locker(mutex);
-    const socket_t fd = ssh_get_fd(handle);
-    if (fd == SSH_INVALID_SOCKET) {
-        return {};
-    }
-    sockaddr_storage addr{};
-    socklen_t len = sizeof(addr);
-    if (getpeername(fd, reinterpret_cast<sockaddr *>(&addr), &len) != 0) {
-        return {};
-    }
-    char host[NI_MAXHOST] = {};
-    if (getnameinfo(reinterpret_cast<sockaddr *>(&addr), len,
-                    host, sizeof(host), nullptr, 0, NI_NUMERICHOST) != 0) {
-        return {};
-    }
-    return QString::fromLatin1(host);
-#else
-    Q_UNUSED(session);
-    return {};
-#endif
+    return session ? session->peerAddress() : QString();
 }
 
 QVariantList MainWindow::listSavedSessions() const

@@ -149,11 +149,11 @@ MCP 客户端通常有自己的工具超时（常见 30s）——**客户端超�
 ```powershell
 # REST
 POST /api/v1/tabs/<ref>/download {"remotePath":"...","localPath":"...","async":true}
-GET  /api/v1/tabs/<ref>/transfer     # {active, direction, method, bytesDone, bytesTotal, elapsedMs}
+GET  /api/v1/tabs/<ref>/transfer     # {active, direction, method, bytesDone, bytesTotal, elapsedMs, lastResult?}
 DELETE /api/v1/tabs/<ref>/transfer   # 取消（保留 .part 供 sftp 续传）
 ```
 
-MCP 对应：`ssh_download`/`ssh_upload` 传 `wait:false` → 轮询 `ssh_transfer_status(session)` → 必要时 `ssh_transfer_cancel(session)`。`active:false` = 没有传输在跑（上一次的结果看审计日志；成功 = 文件已在最终路径且 md5 已校验）。
+MCP 对应：`ssh_download`/`ssh_upload` 传 `wait:false` → 轮询 `ssh_transfer_status(session)` → 必要时 `ssh_transfer_cancel(session)`。`active:false` 只表示没有传输在跑，**不能单独当成成功**：状态响应里的 `lastResult` 给出上一次传输的真实结果（`ok`、`cancelled`、方向、方法、路径、字节数、完成时间、含 md5 的 `message`）。只有 `ok:true` 且 message 标明校验通过，才算文件已到达并核对过。
 
 **exec 不受传输影响**：传输走独立连接 + 独立线程，传输期间同标签 exec 照常可用（可用它 `ls -l` 观察远端文件）。
 

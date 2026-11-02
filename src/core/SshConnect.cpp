@@ -134,6 +134,17 @@ bool wouldBlock()
 #endif
 }
 
+// Cross-platform close for the raw sockets opened above (closesocket is
+// Windows-only; the POSIX build failed on the unqualified name).
+void closeSocketFd(socket_t fd)
+{
+#ifdef Q_OS_WIN
+    ::closesocket(fd);
+#else
+    ::close(fd);
+#endif
+}
+
 // Sends exactly size bytes (bounded by the socket send timeout).
 bool sendAll(socket_t fd, const char *data, size_t size)
 {
@@ -228,7 +239,7 @@ socket_t tcpConnect(const QString &host, int port, QString *error)
                                                  "Cannot connect to proxy %1:%2")
                          .arg(host).arg(port);
         }
-        closesocket(fd);
+        closeSocketFd(fd);
         return SSH_INVALID_SOCKET;
     }
     if (rc != 0) {
@@ -243,7 +254,7 @@ socket_t tcpConnect(const QString &host, int port, QString *error)
                                                      "Proxy connect timeout (%1:%2)")
                              .arg(host).arg(port);
             }
-            closesocket(fd);
+            closeSocketFd(fd);
             return SSH_INVALID_SOCKET;
         }
     }
@@ -282,7 +293,7 @@ socket_t connectViaHttpProxy(const SessionConfig &config, QString *error)
             *error = QCoreApplication::translate("hssh::SshConnect",
                                                  "Failed to send HTTP CONNECT to proxy");
         }
-        closesocket(fd);
+        closeSocketFd(fd);
         return SSH_INVALID_SOCKET;
     }
     QByteArray head;
@@ -293,7 +304,7 @@ socket_t connectViaHttpProxy(const SessionConfig &config, QString *error)
                                                  "HTTP proxy refused CONNECT (%1)")
                          .arg(QString::fromUtf8(head.left(64)));
         }
-        closesocket(fd);
+        closeSocketFd(fd);
         return SSH_INVALID_SOCKET;
     }
     return fd;
@@ -314,7 +325,7 @@ socket_t connectViaSocks5Proxy(const SessionConfig &config, QString *error)
             *error = QCoreApplication::translate("hssh::SshConnect",
                                                  "Failed to greet SOCKS5 proxy");
         }
-        closesocket(fd);
+        closeSocketFd(fd);
         return SSH_INVALID_SOCKET;
     }
     unsigned char choice[2] = {};
@@ -322,14 +333,14 @@ socket_t connectViaSocks5Proxy(const SessionConfig &config, QString *error)
         if (error) {
             *error = QCoreApplication::translate("hssh::SshConnect", "SOCKS5 proxy no reply");
         }
-        closesocket(fd);
+        closeSocketFd(fd);
         return SSH_INVALID_SOCKET;
     }
     if (choice[0] != 0x05) {
         if (error) {
             *error = QCoreApplication::translate("hssh::SshConnect", "Not a SOCKS5 proxy");
         }
-        closesocket(fd);
+        closeSocketFd(fd);
         return SSH_INVALID_SOCKET;
     }
     if (choice[1] == 0x02) {
@@ -341,7 +352,7 @@ socket_t connectViaSocks5Proxy(const SessionConfig &config, QString *error)
                 *error = QCoreApplication::translate("hssh::SshConnect",
                                                      "SOCKS5 credentials too long");
             }
-            closesocket(fd);
+            closeSocketFd(fd);
             return SSH_INVALID_SOCKET;
         }
         QByteArray auth(3 + user.size() + pass.size(), Qt::Uninitialized);
@@ -356,7 +367,7 @@ socket_t connectViaSocks5Proxy(const SessionConfig &config, QString *error)
                 *error = QCoreApplication::translate("hssh::SshConnect",
                                                      "SOCKS5 authentication failed");
             }
-            closesocket(fd);
+            closeSocketFd(fd);
             return SSH_INVALID_SOCKET;
         }
     } else if (choice[1] != 0x00) {
@@ -364,7 +375,7 @@ socket_t connectViaSocks5Proxy(const SessionConfig &config, QString *error)
             *error = QCoreApplication::translate("hssh::SshConnect",
                                                  "SOCKS5 proxy rejected auth methods");
         }
-        closesocket(fd);
+        closeSocketFd(fd);
         return SSH_INVALID_SOCKET;
     }
 
@@ -374,7 +385,7 @@ socket_t connectViaSocks5Proxy(const SessionConfig &config, QString *error)
         if (error) {
             *error = QCoreApplication::translate("hssh::SshConnect", "Target host too long");
         }
-        closesocket(fd);
+        closeSocketFd(fd);
         return SSH_INVALID_SOCKET;
     }
     QByteArray req(7 + host.size(), Qt::Uninitialized);
@@ -392,7 +403,7 @@ socket_t connectViaSocks5Proxy(const SessionConfig &config, QString *error)
             *error = QCoreApplication::translate("hssh::SshConnect",
                                                  "Failed to send SOCKS5 CONNECT");
         }
-        closesocket(fd);
+        closeSocketFd(fd);
         return SSH_INVALID_SOCKET;
     }
     unsigned char head[4] = {};
@@ -402,7 +413,7 @@ socket_t connectViaSocks5Proxy(const SessionConfig &config, QString *error)
                                                  "SOCKS5 CONNECT failed (reply 0x%1)")
                          .arg(head[1], 2, 16, QLatin1Char('0'));
         }
-        closesocket(fd);
+        closeSocketFd(fd);
         return SSH_INVALID_SOCKET;
     }
     // Skip the bound address: 4 (IPv4) / 16 (IPv6) / 1+len (domain) + port.
@@ -414,12 +425,12 @@ socket_t connectViaSocks5Proxy(const SessionConfig &config, QString *error)
     } else if (head[3] == 0x03) {
         unsigned char len = 0;
         if (!recvAll(fd, reinterpret_cast<char *>(&len), 1)) {
-            closesocket(fd);
+            closeSocketFd(fd);
             return SSH_INVALID_SOCKET;
         }
         skip += 1 + len;
     } else {
-        closesocket(fd);
+        closeSocketFd(fd);
         return SSH_INVALID_SOCKET;
     }
     char sink[256];
@@ -429,7 +440,7 @@ socket_t connectViaSocks5Proxy(const SessionConfig &config, QString *error)
             *error = QCoreApplication::translate("hssh::SshConnect",
                                                  "SOCKS5 proxy reply truncated");
         }
-        closesocket(fd);
+        closeSocketFd(fd);
         return SSH_INVALID_SOCKET;
     }
     return fd;
@@ -450,10 +461,6 @@ socket_t connectViaProxy(const SessionConfig &config, QString *error)
     return SSH_INVALID_SOCKET;
 }
 
-#ifndef Q_OS_WIN
-inline void closesocket(socket_t fd) { ::close(fd); }
-#endif
-
 // Loopback socket pair: Windows has no socketpair(), so emulate it with a
 // short-lived TCP listener on 127.0.0.1.
 bool makeSocketPair(socket_t *a, socket_t *b)
@@ -469,27 +476,27 @@ bool makeSocketPair(socket_t *a, socket_t *b)
     addr.sin_port = 0;
     if (::bind(listener, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0
         || ::listen(listener, 1) != 0) {
-        closesocket(listener);
+        closeSocketFd(listener);
         return false;
     }
     socklen_t len = sizeof(addr);
     if (getsockname(listener, reinterpret_cast<sockaddr *>(&addr), &len) != 0) {
-        closesocket(listener);
+        closeSocketFd(listener);
         return false;
     }
     const socket_t client = ::socket(AF_INET, SOCK_STREAM, 0);
     if (client == SSH_INVALID_SOCKET
         || ::connect(client, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
-        closesocket(listener);
+        closeSocketFd(listener);
         if (client != SSH_INVALID_SOCKET) {
-            closesocket(client);
+            closeSocketFd(client);
         }
         return false;
     }
     const socket_t server = ::accept(listener, nullptr, nullptr);
-    closesocket(listener);
+    closeSocketFd(listener);
     if (server == SSH_INVALID_SOCKET) {
-        closesocket(client);
+        closeSocketFd(client);
         return false;
     }
     *a = client; // pump end
@@ -563,7 +570,7 @@ void jumpPumpRun(JumpTunnel *t)
         }
     }
     ::shutdown(t->local, 2);
-    closesocket(t->local);
+    closeSocketFd(t->local);
     ssh_channel_close(t->channel);
     ssh_channel_free(t->channel);
     ssh_disconnect(t->jump);
@@ -746,6 +753,44 @@ void sshDisconnectAndFree(ssh_session session)
         ssh_disconnect(session);
         ssh_free(session);
     }
+}
+
+QString sshPeerAddress(ssh_session session)
+{
+    if (!session) {
+        return {};
+    }
+    const socket_t fd = ssh_get_fd(session);
+    if (fd == SSH_INVALID_SOCKET) {
+        return {};
+    }
+    sockaddr_storage addr{};
+    socklen_t len = sizeof(addr);
+    if (getpeername(fd, reinterpret_cast<sockaddr *>(&addr), &len) != 0) {
+        return {};
+    }
+    char host[NI_MAXHOST] = {};
+    if (getnameinfo(reinterpret_cast<sockaddr *>(&addr), len, host, sizeof(host),
+                    nullptr, 0, NI_NUMERICHOST) != 0) {
+        return {};
+    }
+    return QString::fromLatin1(host);
+}
+
+void sshInterruptSocket(ssh_session session)
+{
+    if (!session) {
+        return;
+    }
+    const socket_t fd = ssh_get_fd(session);
+    if (fd == SSH_INVALID_SOCKET) {
+        return;
+    }
+#ifdef Q_OS_WIN
+    ::shutdown(fd, SD_BOTH);
+#else
+    ::shutdown(fd, SHUT_RDWR);
+#endif
 }
 
 } // namespace hssh
