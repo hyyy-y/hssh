@@ -54,6 +54,8 @@ sudo apt update
 sudo apt install build-essential cmake qt6-base-dev qt6-base-dev-tools libqt6widgets6
 ```
 
+> 使用系统 libssh 构建时（安装 `libssh-dev`），还需要 `libmbedtls-dev`；缺少 mbedTLS 时 CMake 会在配置阶段报 `Could NOT find MbedTLS`。未安装系统 libssh 时，构建会通过 FetchContent 自动下载 libssh 与 mbedTLS，不需要这两个包。
+
 #### macOS
 
 ```bash
